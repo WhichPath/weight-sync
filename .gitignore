@@ -13,3 +13,4 @@ local.properties
 ref_*/
 *.fit
 .kotlin/
+output_apk/
