@@ -29,9 +29,17 @@ fun DashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // 连接空闲时自动启动低延迟扫描，实现踏秤即连
+    LaunchedEffect(uiState.connection) {
+        if (uiState.connection == BleScaleClient.ConnectionState.IDLE) {
+            viewModel.startScanning()
+        }
+    }
+
     DashboardScreen(
         uiState = uiState,
-        onStartScan = { viewModel.startPairingScan() },
+        onStartScan = { viewModel.startScanning() },
         onNavigateToPairing = onNavigateToPairing,
         modifier = modifier
     )

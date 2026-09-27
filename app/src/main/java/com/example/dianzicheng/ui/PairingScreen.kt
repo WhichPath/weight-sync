@@ -31,12 +31,14 @@ fun PairingScreen(
     val context = LocalContext.current
     var connectingMac by remember { mutableStateOf<String?>(null) }
 
-    // Permissions needed for BLE scanning
+    // Permissions needed for BLE scanning (ColorOS / Android 15 requires Location permissions)
     val requiredPermissions = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
             )
         } else {
             arrayOf(
@@ -47,12 +49,14 @@ fun PairingScreen(
     }
 
     fun hasBlePermissions(): Boolean {
+        val hasLoc = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+            hasLoc
         } else {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            hasLoc
         }
     }
 
@@ -87,11 +91,10 @@ fun PairingScreen(
         }
     }
 
-    // 当且仅当用户手动点击连接并成功记住该设备（isDeviceRemembered 为 true 且已连接），才自动跳转完成配对
-    LaunchedEffect(uiState.connection, uiState.isDeviceRemembered) {
-        if (uiState.isDeviceRemembered &&
-            (uiState.connection == BleScaleClient.ConnectionState.CONNECTED ||
-             uiState.connection == BleScaleClient.ConnectionState.MEASURING)) {
+    // 踏秤即连或手动点击连接成功后，自动完成配对并跳转主页
+    LaunchedEffect(uiState.connection) {
+        if (uiState.connection == BleScaleClient.ConnectionState.CONNECTED ||
+            uiState.connection == BleScaleClient.ConnectionState.MEASURING) {
             connectingMac = null
             onPairingComplete()
         }

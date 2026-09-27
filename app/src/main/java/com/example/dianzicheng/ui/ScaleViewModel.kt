@@ -254,8 +254,19 @@ class ScaleViewModel(
         }
     }
 
+    fun startScanning() {
+        bleClient.startScan()
+    }
+
     fun startPairingScan() {
         bleClient.startPairingScan()
+    }
+
+    fun connectToMac(macAddress: String) {
+        viewModelScope.launch {
+            preferenceManager.savePairedMac(macAddress)
+            bleClient.connectMac(macAddress)
+        }
     }
 
     fun manualConnect(device: BleScaleClient.DiscoveredScaleDevice) {

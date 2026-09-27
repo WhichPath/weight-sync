@@ -190,14 +190,18 @@ class BleScaleClient(private val context: Context) {
         val scanRecord = result.scanRecord
         val serviceUuids = scanRecord?.serviceUuids
         val rawBytes = scanRecord?.bytes
-        // 尝试从多个来源获取设备名称（优先系统缓存，其次广播字段，最后手动解析）
-        val deviceName = device.name ?: scanRecord?.deviceName ?: parseNameFromBytes(rawBytes)
+        // 尝试从多个来源获取设备名称（优先系统缓存，其次广播字段，最后手动解析），并捕获可能的 SecurityException
+        val deviceName = (try { device.name } catch (e: SecurityException) { null }) 
+            ?: scanRecord?.deviceName 
+            ?: parseNameFromBytes(rawBytes)
+
+        AppLogger.d(TAG, "扫描中... 发现设备: '$deviceName' [${device.address}] RSSI: ${result.rssi} UUIDs: $serviceUuids")
 
         // 1. 已配对过的 MAC 地址精确匹配
         val isMatchedMac = !lastPairedMac.isNullOrEmpty() && device.address.equals(lastPairedMac, ignoreCase = true)
         if (isMatchedMac) return true
 
-        // 2. 支持的体脂秤/体重秤 Service UUID 匹配（含 AFU、SIG WSS/BCS、OKOK/芯海等）
+        // 2. 支持的体脂秤/体重秤 Service UUID 匹配（含 AFU 0000FFB0、SIG WSS/BCS、OKOK/芯海等）
         val hasService = serviceUuids?.any { it.uuid in SUPPORTED_SERVICE_UUIDS } == true
         if (hasService) return true
 
@@ -206,7 +210,7 @@ class BleScaleClient(private val context: Context) {
             return true
         }
 
-        // 4. 称重设备常见品牌与关键词精确匹配（避免使用宽泛包含如 "MI", "S7", "S9"，防止误连路由器、扫地机、手机等设备）
+        // 4. 称重设备常见品牌与关键词精确匹配
         val nameMatched = deviceName?.let { name ->
             name.contains("AFU", ignoreCase = true) ||
             name.contains("WL-TZ", ignoreCase = true) ||
@@ -257,12 +261,26 @@ class BleScaleClient(private val context: Context) {
                         hasValidAcHeader = true
                         break
                     }
+                    // 兼容厂商数据包含 2 字节 Company ID (0xAC 在 i+4)
+                    if (len > 3 && i + 4 < rawBytes.size) {
+                        val thirdDataByte = rawBytes[i + 4].toInt() and 0xFF
+                        if (thirdDataByte == 0xAC) {
+                            hasValidAcHeader = true
+                            break
+                        }
+                    }
                 }
                 i += len + 1
             }
         }
+        if (hasValidAcHeader) return true
 
-        return hasValidAcHeader
+        // 6. AFU 专用协议尝试解析
+        if (rawBytes != null && AFUPacketParser.parseWeight(rawBytes) != null) {
+            return true
+        }
+
+        return false
     }
 
     // -------------------------------------------------------------------------
@@ -278,50 +296,44 @@ class BleScaleClient(private val context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
 
-            // 模式 1：处于手动配对模式，或尚未记住任何设备
-            if (isPairingMode || lastPairedMac.isNullOrEmpty()) {
-                if (isScaleAdvertisement(result)) {
-                    val rawBytes = result.scanRecord?.bytes
-                    val name = device.name ?: result.scanRecord?.deviceName ?: parseNameFromBytes(rawBytes) ?: "体脂秤设备 (${device.address.takeLast(5)})"
-                    val isAdv = MultiScalePacketParser.parseAdvertisement(result.scanRecord) != null
-
-                    val currentList = _discoveredScales.value.toMutableList()
-                    val existingIndex = currentList.indexOfFirst { it.address.equals(device.address, ignoreCase = true) }
-                    val item = DiscoveredScaleDevice(
-                        name = name,
-                        address = device.address,
-                        rssi = result.rssi,
-                        isBroadcastScale = isAdv
-                    )
-                    if (existingIndex >= 0) {
-                        currentList[existingIndex] = item
-                    } else {
-                        currentList.add(item)
-                    }
-                    _discoveredScales.value = currentList
-                    _discoveredDevice.value = Pair(name, device.address)
-                }
-                // 【核心保护】：手动配对阶段仅收集设备列表，绝不自动发起连接，等待用户手动点击！
-                return
-            }
-
-            // 模式 2：已记住设备，严格执行自动连接（仅连接该设备，杜绝误连周围无关设备）
-            val targetMac = lastPairedMac ?: return
-            if (!device.address.equals(targetMac, ignoreCase = true)) {
-                // 非已绑定的设备，严格忽略
-                return
-            }
-
-            // 确认是已记住的目标设备后，按协议处理
+            // 过滤判断该广播结果是否来自目标体脂秤
             if (isScaleAdvertisement(result)) {
-                val name = device.name ?: result.scanRecord?.deviceName ?: parseNameFromBytes(result.scanRecord?.bytes) ?: "体脂秤设备 (${device.address.takeLast(5)})"
+                val rawBytes = result.scanRecord?.bytes
+                val name = (try { device.name } catch (e: SecurityException) { null })
+                    ?: result.scanRecord?.deviceName
+                    ?: parseNameFromBytes(rawBytes)
+                    ?: "体脂秤设备 (${device.address.takeLast(5)})"
+                val rawAdvHex = rawBytes?.joinToString(" ") { "%02X".format(it) } ?: "null"
+                AppLogger.i(TAG, "扫描匹配到体脂秤: $name [${device.address}], RSSI: ${result.rssi}, 广播数据: $rawAdvHex")
 
-                // 尝试直接从广播数据解析（如小米秤、免配对广播秤即踩即读）
+                val isAdv = MultiScalePacketParser.parseAdvertisement(result.scanRecord) != null
+
+                // 更新发现设备列表与最新设备流
+                val currentList = _discoveredScales.value.toMutableList()
+                val existingIndex = currentList.indexOfFirst { it.address.equals(device.address, ignoreCase = true) }
+                val item = DiscoveredScaleDevice(
+                    name = name,
+                    address = device.address,
+                    rssi = result.rssi,
+                    isBroadcastScale = isAdv
+                )
+                if (existingIndex >= 0) {
+                    currentList[existingIndex] = item
+                } else {
+                    currentList.add(item)
+                }
+                _discoveredScales.value = currentList
+                _discoveredDevice.value = Pair(name, device.address)
+
+                // 若已记住特定设备 MAC，严格防止误连周围其他无关设备
+                val targetMac = lastPairedMac
+                if (!targetMac.isNullOrEmpty() && !device.address.equals(targetMac, ignoreCase = true)) {
+                    return
+                }
+
+                // 处理免配对广播秤（如小米体脂秤广播）
                 val advScaleData = MultiScalePacketParser.parseAdvertisement(result.scanRecord)
                 if (advScaleData != null) {
-                    // Bug #25 修复：只要 parseAdvertisement 返回非 null，就判定为广播秤，统一在此处理。
-                    // 原条件 "advScaleData.weightKg > 0.0" 会导致离秤 0kg 包 fall-through 到下方 GATT 连接逻辑，
-                    // 从而错误地对广播秤发起 GATT 连接。
                     if (advScaleData.weightKg > 0.0) {
                         _weight.value = advScaleData.weightKg
                         val validStable = advScaleData.isStable && (advScaleData.weightKg >= 3.0)
@@ -331,12 +343,10 @@ class BleScaleClient(private val context: Context) {
                         } else if (_connectionState.value != ConnectionState.MEASURING) {
                             _connectionState.value = ConnectionState.CONNECTED
                         }
-                        // 仅当体重 >= 3.0kg 时才接收阻抗（人体必须站秤接触电极，禁止空秤接收阻抗）
                         if (advScaleData.weightKg >= 3.0) {
                             advScaleData.impedanceOhm?.let { _impedance.value = it }
                         }
                     } else {
-                        // 广播秤下秤包（weightKg == 0.0）：立即归零体重与稳定状态，切回已连接状态
                         AppLogger.d(TAG, "广播秤下秤包 (0.0kg)：归零测量状态")
                         _weight.value = 0.0
                         _isStable.value = false
@@ -346,9 +356,11 @@ class BleScaleClient(private val context: Context) {
                         }
                     }
 
-                    _discoveredDevice.value = Pair(name, device.address)
+                    if (lastPairedMac.isNullOrEmpty()) {
+                        lastPairedMac = device.address
+                        onMacDiscovered?.invoke(device.address)
+                    }
 
-                    // 重置 2.5s 无广播数据超时定时器（无论体重是否为 0 均重置，避免超时回调再次归零干扰）
                     inactivityRunnable?.let { handler.removeCallbacks(it) }
                     val watchdog = Runnable {
                         AppLogger.d(TAG, "无广播数据超时 (2.5s): 用户已下秤，重置测量状态")
@@ -361,15 +373,15 @@ class BleScaleClient(private val context: Context) {
                     }
                     inactivityRunnable = watchdog
                     handler.postDelayed(watchdog, 2500)
-
-                    // 广播秤保持扫描流以持续接收实时示数，直接返回，不走 GATT 连接逻辑
                     return
                 }
 
-                // 非广播秤（AFU / SIG / OKOK 等需 GATT 双向通信的设备）：建立 GATT 连接
-                AppLogger.i(TAG, "已发现已记住的体脂秤，自动连接 GATT: $name [${device.address}]")
-                _discoveredDevice.value = Pair(name, device.address)
+                // 非广播秤（阿福体脂秤与标准 GATT 秤）：
+                // 还原 1.3.8 体验：踏秤即连！自动记住 MAC 并建立 GATT 连接
+                AppLogger.i(TAG, "自动连接目标体脂秤 GATT: $name [${device.address}]")
                 stopScan()
+                lastPairedMac = device.address
+                onMacDiscovered?.invoke(device.address)
                 connect(device)
             }
         }
@@ -451,13 +463,6 @@ class BleScaleClient(private val context: Context) {
         _weight.value = 0.0
         _isStable.value = false
         _impedance.value = 0.0
-
-        // 【关键保护】：非配对模式下，如果没有记住任何设备，绝不执行盲目扫描和自动连接
-        if (!isPairingMode && lastPairedMac.isNullOrEmpty()) {
-            AppLogger.i(TAG, "尚未记住任何体脂秤设备，跳过自动连接扫描（请先进行手动配对）")
-            _connectionState.value = ConnectionState.IDLE
-            return
-        }
 
         val scanner = bluetoothAdapter?.bluetoothLeScanner
         if (scanner == null) {
@@ -887,8 +892,8 @@ class BleScaleClient(private val context: Context) {
             connectTimeoutRunnable?.let { handler.removeCallbacks(it) }
 
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                // GATT 操作失败（如被远端断开、连接超时等）
-                AppLogger.e(TAG, "GATT 连接失败 (status=$status)，当前重试次数: $gattRetryCount / $MAX_GATT_RETRY")
+                // GATT 操作失败（如被远端断开、连接超时、133 冲突等），关闭旧连接并延迟 800ms 重新扫描
+                AppLogger.e(TAG, "GATT 连接失败 (status=$status)，重新发起扫描...")
                 _connectionState.value = ConnectionState.IDLE
                 try {
                     gatt.close()
@@ -896,17 +901,11 @@ class BleScaleClient(private val context: Context) {
                 if (bluetoothGatt == gatt) {
                     bluetoothGatt = null
                 }
-                if (gattRetryCount < MAX_GATT_RETRY) {
-                    // 指数退避：每次失败延迟加倍（1s, 2s, 4s, 8s, 16s），最长 30s
-                    val delayMs = (1000L * (1 shl gattRetryCount)).coerceAtMost(30_000L)
-                    gattRetryCount++
-                    AppLogger.w(TAG, "将在 ${delayMs}ms 后自动重连（第 $gattRetryCount 次）")
-                    handler.postDelayed({ startScan() }, delayMs)
-                } else {
-                    // 超出最大重试次数：停止自动重连，让用户手动操作
-                    gattRetryCount = 0
-                    AppLogger.e(TAG, "已达最大重试次数 ($MAX_GATT_RETRY)，停止自动重连，请手动重试")
-                }
+                handler.postDelayed({
+                    if (_connectionState.value == ConnectionState.IDLE) {
+                        startScan()
+                    }
+                }, 800)
                 return
             }
 
@@ -932,10 +931,10 @@ class BleScaleClient(private val context: Context) {
                 if (bluetoothGatt == gatt) {
                     bluetoothGatt = null
                 }
-                if (!isPairingMode && !lastPairedMac.isNullOrEmpty()) {
+                if (!isPairingMode) {
                     AppLogger.i(TAG, "设备断开后自动恢复扫描以等待下次上秤...")
                     handler.postDelayed({
-                        if (!isPairingMode && !lastPairedMac.isNullOrEmpty() && _connectionState.value == ConnectionState.IDLE) {
+                        if (!isPairingMode && _connectionState.value == ConnectionState.IDLE) {
                             startScan()
                         }
                     }, 1200)

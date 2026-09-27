@@ -47,9 +47,13 @@ class MainActivity : ComponentActivity() {
         if (denied.isNotEmpty()) {
             Toast.makeText(
                 this,
-                "蓝牙权限被拒绝，请前往「设置 → 应用 → 权限」手动开启蓝牙权限，否则无法搜索连接体脂秤",
+                "蓝牙与定位权限被拒绝，请前往「设置 → 应用 → 权限」手动开启，否则无法搜索连接体脂秤",
                 Toast.LENGTH_LONG
             ).show()
+        } else {
+            if (::bleClient.isInitialized && bleClient.connectionState.value == BleScaleClient.ConnectionState.IDLE) {
+                bleClient.startScan()
+            }
         }
     }
 
@@ -152,6 +156,8 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         } else {
             permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
             permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -168,8 +174,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // 回到前台：如果已记住设备且当前为空闲状态，自动恢复扫描以保持踏秤即连
-        if (!bleClient.lastPairedMac.isNullOrEmpty() && bleClient.connectionState.value == BleScaleClient.ConnectionState.IDLE) {
+        // 回到前台：只要当前为空闲状态，自动恢复扫描以保持踏秤即连（无论是否首次打开）
+        if (bleClient.connectionState.value == BleScaleClient.ConnectionState.IDLE) {
             bleClient.startScan()
         }
     }
