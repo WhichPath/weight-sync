@@ -44,14 +44,20 @@ object AFUPacketParser {
         val w4 = data[offset + 4].toInt() and 0xFF  // 体重中字节
         val w5 = data[offset + 5].toInt() and 0xFF  // 体重低字节
 
+        // 严格范围校验：在 AFU 协议中，体重高字节带有基准偏移 0x68。
+        // 人体正常体重（0kg ~ 220kg）对应 w3 严格落在 0x68 ~ 0x6C 之间。
+        // 若超出此范围，说明是其他蓝牙设备的无关数据帧，坚决拦截防止误报荒谬读数（如 2820kg）
+        if (w3 < 0x68 || w3 > 0x6C) return null
+
         // offset+6 字节值为 0x02 时表示秤面已稳定锁定
         val isStable = (data[offset + 6].toInt() and 0xFF) == 0x02
 
         // 还原原始体重整数值：高字节需减去协议基准偏移 0x68，再组合为 24 位整数
         val rawWeight = (w3 - 0x68) * 65536 + w4 * 256 + w5
+        if (rawWeight < 0 || rawWeight > 220000) return null
 
         // 将原始整数转换为千克（精度 0.001kg），负值或零统一返回 0.0；体重 <= 0 时稳定标志强制为 false
-        val weight = if (rawWeight <= 0) 0.0 else rawWeight / 1000.0
+        val weight = rawWeight / 1000.0
         val effectiveStable = isStable && weight > 0.0
 
         return WeightData(weight, effectiveStable)

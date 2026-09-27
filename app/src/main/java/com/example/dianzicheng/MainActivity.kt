@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
         if (denied.isNotEmpty()) {
             Toast.makeText(
                 this,
-                "蓝牙与定位权限被拒绝，请前往「设置 → 应用 → 权限」手动开启，否则无法搜索连接体脂秤",
+                "蓝牙权限被拒绝，请前往「设置 → 应用 → 权限」开启「附近设备」权限，否则无法连接体脂秤",
                 Toast.LENGTH_LONG
             ).show()
         } else {
@@ -156,11 +156,6 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
-        } else {
-            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
         
         val missing = permissions.filter {

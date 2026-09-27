@@ -142,6 +142,26 @@ class BleScaleClient(private val context: Context) {
 
 
     /**
+     * 在原始字节数组中查找是否包含指定 ASCII 关键词（大小写不敏感）。
+     */
+    private fun containsAscii(bytes: ByteArray?, keyword: String): Boolean {
+        if (bytes == null || bytes.size < keyword.length) return false
+        val kwUpper = keyword.uppercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
+        val kwLower = keyword.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
+        for (i in 0..bytes.size - kwUpper.size) {
+            var matchUpper = true
+            var matchLower = true
+            for (j in kwUpper.indices) {
+                val b = bytes[i + j]
+                if (b != kwUpper[j]) matchUpper = false
+                if (b != kwLower[j]) matchLower = false
+            }
+            if (matchUpper || matchLower) return true
+        }
+        return false
+    }
+
+    /**
      * 从 BLE 广播原始字节数组中按标准 AD Structure 格式解析设备名称。
      *
      * BLE 广播数据由若干 AD 结构（length + type + value）组成。
@@ -179,8 +199,9 @@ class BleScaleClient(private val context: Context) {
      * 匹配优先级（由高到低）：
      * 1. 已配对 MAC 地址精确匹配（最高优先级，直接返回 true）。
      * 2. 广播包中包含厂商私有服务 UUID（0000FFB0）。
-     * 3. 设备名称包含特定体脂秤关键词（AFU / WL-TZ / TZ-A1 / Scale / Weight / 体脂 / 电子秤）。
-     * 4. 广播原始数据中厂商数据（0xFF）或服务数据（0x16）段的首字节为 0xAC 帧头。
+     * 3. 设备名称包含特定体脂秤关键词（AFU / WL-TZ / TZ-A1 / Scale / Weight / 体脂 / 电子秤 / WL）。
+     * 4. 原始广播包含 ASCII 关键词 "AFU" / "WL-TZ"。
+     * 5. 广播原始数据中厂商数据（0xFF）段的首字节为 0xAC 帧头。
      *
      * @param result BLE 扫描回调返回的单条扫描结果。
      * @return 判定为目标设备返回 true，否则返回 false。
@@ -201,16 +222,11 @@ class BleScaleClient(private val context: Context) {
         val isMatchedMac = !lastPairedMac.isNullOrEmpty() && device.address.equals(lastPairedMac, ignoreCase = true)
         if (isMatchedMac) return true
 
-        // 2. 支持的体脂秤/体重秤 Service UUID 匹配（含 AFU 0000FFB0、SIG WSS/BCS、OKOK/芯海等）
+        // 2. 支持的体脂秤/体重秤 Service UUID 匹配（含 AFU 0000FFB0 及其他支持的 UUID）
         val hasService = serviceUuids?.any { it.uuid in SUPPORTED_SERVICE_UUIDS } == true
         if (hasService) return true
 
-        // 3. 广播数据包直接可解析出有效体重（如小米秤 Service Data、免配对广播秤）
-        if (MultiScalePacketParser.parseAdvertisement(scanRecord) != null) {
-            return true
-        }
-
-        // 4. 称重设备常见品牌与关键词精确匹配
+        // 3. 称重设备常见品牌与关键词精确匹配
         val nameMatched = deviceName?.let { name ->
             name.contains("AFU", ignoreCase = true) ||
             name.contains("WL-TZ", ignoreCase = true) ||
@@ -220,67 +236,35 @@ class BleScaleClient(private val context: Context) {
             name.contains("体脂", ignoreCase = true) ||
             name.contains("电子秤", ignoreCase = true) ||
             name.contains("体重", ignoreCase = true) ||
-            name.startsWith("MIBFS", ignoreCase = true) ||
-            name.startsWith("MISCALE", ignoreCase = true) ||
-            name.contains("小米体重", ignoreCase = true) ||
-            name.contains("小米体脂", ignoreCase = true) ||
-            name.contains("米家体脂", ignoreCase = true) ||
-            name.contains("米家体重", ignoreCase = true) ||
-            name.equals("MI_SCALE", ignoreCase = true) ||
-            name.contains("OKOK", ignoreCase = true) ||
-            name.contains("Yolanda", ignoreCase = true) ||
-            name.contains("Senssun", ignoreCase = true) ||
-            name.contains("ICOMON", ignoreCase = true) ||
-            name.contains("沃莱", ignoreCase = true) ||
-            name.contains("香山", ignoreCase = true) ||
-            name.contains("云麦", ignoreCase = true) ||
-            name.contains("Phicomm", ignoreCase = true) ||
-            name.contains("斐讯", ignoreCase = true) ||
-            name.startsWith("zS7", ignoreCase = true) ||
-            name.startsWith("S7_", ignoreCase = true) ||
-            name.startsWith("S9_", ignoreCase = true) ||
-            name.equals("S7", ignoreCase = true) ||
-            name.equals("S9", ignoreCase = true)
+            name.contains("WL", ignoreCase = true)
         } == true
         if (nameMatched) return true
 
-        // 5. 解析 BLE 广播数据中的厂商自定义数据包结构 (0xFF 或 0x16)，校验 0xAC 帧头
+        // 4. 原始广播包中 ASCII 匹配 "AFU" / "WL-TZ"
+        if (containsAscii(rawBytes, "AFU") || containsAscii(rawBytes, "WL-TZ") || containsAscii(rawBytes, "TZ-A1")) {
+            return true
+        }
+
+        // 5. 解析 BLE 广播数据中的厂商自定义数据包结构 (0xFF)，校验 0xAC 帧头
         var hasValidAcHeader = false
         if (rawBytes != null && rawBytes.size >= 6) {
             var i = 0
-            // 遍历广播原始数据的每一个 AD 结构
             while (i < rawBytes.size - 2) {
                 val len = rawBytes[i].toInt() and 0xFF
                 if (len == 0 || i + len >= rawBytes.size) break
                 val type = rawBytes[i + 1].toInt() and 0xFF
-                // 仅检查厂商数据（0xFF）或服务数据（0x16）类型的 AD 段
-                if ((type == 0xFF || type == 0x16) && len > 1) {
+                // 仅检查厂商数据（0xFF）类型的 AD 段，且长度至少 5 字节
+                if (type == 0xFF && len >= 5) {
                     val firstDataByte = rawBytes[i + 2].toInt() and 0xFF
-                    // 数据段首字节为 0xAC 则认为是 AFU 协议帧
                     if (firstDataByte == 0xAC) {
                         hasValidAcHeader = true
                         break
-                    }
-                    // 兼容厂商数据包含 2 字节 Company ID (0xAC 在 i+4)
-                    if (len > 3 && i + 4 < rawBytes.size) {
-                        val thirdDataByte = rawBytes[i + 4].toInt() and 0xFF
-                        if (thirdDataByte == 0xAC) {
-                            hasValidAcHeader = true
-                            break
-                        }
                     }
                 }
                 i += len + 1
             }
         }
-        if (hasValidAcHeader) return true
-
-        // 6. AFU 专用协议尝试解析
-        if (rawBytes != null && AFUPacketParser.parseWeight(rawBytes) != null) {
-            return true
-        }
-
-        return false
+        return hasValidAcHeader
     }
 
     // -------------------------------------------------------------------------
@@ -296,6 +280,12 @@ class BleScaleClient(private val context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
 
+            // 若已记住特定设备 MAC，严格防止误连周围其他无关设备
+            val targetMac = lastPairedMac
+            if (!targetMac.isNullOrEmpty() && !device.address.equals(targetMac, ignoreCase = true)) {
+                return
+            }
+
             // 过滤判断该广播结果是否来自目标体脂秤
             if (isScaleAdvertisement(result)) {
                 val rawBytes = result.scanRecord?.bytes
@@ -306,8 +296,6 @@ class BleScaleClient(private val context: Context) {
                 val rawAdvHex = rawBytes?.joinToString(" ") { "%02X".format(it) } ?: "null"
                 AppLogger.i(TAG, "扫描匹配到体脂秤: $name [${device.address}], RSSI: ${result.rssi}, 广播数据: $rawAdvHex")
 
-                val isAdv = MultiScalePacketParser.parseAdvertisement(result.scanRecord) != null
-
                 // 更新发现设备列表与最新设备流
                 val currentList = _discoveredScales.value.toMutableList()
                 val existingIndex = currentList.indexOfFirst { it.address.equals(device.address, ignoreCase = true) }
@@ -315,7 +303,7 @@ class BleScaleClient(private val context: Context) {
                     name = name,
                     address = device.address,
                     rssi = result.rssi,
-                    isBroadcastScale = isAdv
+                    isBroadcastScale = false
                 )
                 if (existingIndex >= 0) {
                     currentList[existingIndex] = item
@@ -325,59 +313,8 @@ class BleScaleClient(private val context: Context) {
                 _discoveredScales.value = currentList
                 _discoveredDevice.value = Pair(name, device.address)
 
-                // 若已记住特定设备 MAC，严格防止误连周围其他无关设备
-                val targetMac = lastPairedMac
-                if (!targetMac.isNullOrEmpty() && !device.address.equals(targetMac, ignoreCase = true)) {
-                    return
-                }
-
-                // 处理免配对广播秤（如小米体脂秤广播）
-                val advScaleData = MultiScalePacketParser.parseAdvertisement(result.scanRecord)
-                if (advScaleData != null) {
-                    if (advScaleData.weightKg > 0.0) {
-                        _weight.value = advScaleData.weightKg
-                        val validStable = advScaleData.isStable && (advScaleData.weightKg >= 3.0)
-                        _isStable.value = validStable
-                        if (validStable) {
-                            _connectionState.value = ConnectionState.MEASURING
-                        } else if (_connectionState.value != ConnectionState.MEASURING) {
-                            _connectionState.value = ConnectionState.CONNECTED
-                        }
-                        if (advScaleData.weightKg >= 3.0) {
-                            advScaleData.impedanceOhm?.let { _impedance.value = it }
-                        }
-                    } else {
-                        AppLogger.d(TAG, "广播秤下秤包 (0.0kg)：归零测量状态")
-                        _weight.value = 0.0
-                        _isStable.value = false
-                        _impedance.value = 0.0
-                        if (_connectionState.value == ConnectionState.MEASURING) {
-                            _connectionState.value = ConnectionState.CONNECTED
-                        }
-                    }
-
-                    if (lastPairedMac.isNullOrEmpty()) {
-                        lastPairedMac = device.address
-                        onMacDiscovered?.invoke(device.address)
-                    }
-
-                    inactivityRunnable?.let { handler.removeCallbacks(it) }
-                    val watchdog = Runnable {
-                        AppLogger.d(TAG, "无广播数据超时 (2.5s): 用户已下秤，重置测量状态")
-                        _weight.value = 0.0
-                        _isStable.value = false
-                        _impedance.value = 0.0
-                        if (_connectionState.value == ConnectionState.MEASURING) {
-                            _connectionState.value = ConnectionState.CONNECTED
-                        }
-                    }
-                    inactivityRunnable = watchdog
-                    handler.postDelayed(watchdog, 2500)
-                    return
-                }
-
-                // 非广播秤（阿福体脂秤与标准 GATT 秤）：
-                // 还原 1.3.8 体验：踏秤即连！自动记住 MAC 并建立 GATT 连接
+                // 阿福体脂秤（GATT 双向通信秤）：踏秤即连！
+                // 停止扫描，记录 MAC 并发起 GATT 连接
                 AppLogger.i(TAG, "自动连接目标体脂秤 GATT: $name [${device.address}]")
                 stopScan()
                 lastPairedMac = device.address

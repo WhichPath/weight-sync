@@ -120,17 +120,10 @@ object MultiScalePacketParser {
                 val len = rawBytes[i].toInt() and 0xFF
                 if (len == 0 || i + len >= rawBytes.size) break
                 val type = rawBytes[i + 1].toInt() and 0xFF
-                if ((type == 0xFF || type == 0x16) && len >= 5) {
-                    val mfgPayload = rawBytes.copyOfRange(i + 2, i + 1 + len)
-                    // 若数据段首字节为 0xAC 则按 AFU 协议解析
-                    if ((mfgPayload[0].toInt() and 0xFF) == 0xAC) {
-                        parseAfu(mfgPayload)?.let { return it }
-                    }
-                    if (len >= 6) {
-                        // 跳过 2 字节 Company ID 尝试 OKOK/芯海解析
-                        val payloadWithoutCompany = rawBytes.copyOfRange(i + 4, i + 1 + len)
-                        parseOkokChipsea(payloadWithoutCompany)?.let { return it }
-                    }
+                if ((type == 0xFF || type == 0x16) && len >= 6) {
+                    // 跳过 2 字节 Company ID 尝试 OKOK/芯海解析
+                    val payloadWithoutCompany = rawBytes.copyOfRange(i + 4, i + 1 + len)
+                    parseOkokChipsea(payloadWithoutCompany)?.let { return it }
                 }
                 i += len + 1
             }
