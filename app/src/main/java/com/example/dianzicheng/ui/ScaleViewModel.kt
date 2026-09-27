@@ -99,6 +99,12 @@ class ScaleViewModel(
             combine(preferenceManager.pairedMac, preferenceManager.pairedDeviceName) { mac, name ->
                 Pair(mac, name)
             }.collect { (mac, name) ->
+                // 若此前旧版本误记录了云麦/小米等非阿福设备，自动清洗该残留记录
+                if (!mac.isNullOrEmpty() && !name.isNullOrEmpty() && !bleClient.isAfuDeviceName(name)) {
+                    AppLogger.w(TAG, "检测到历史记录中的非阿福设备: '$name' [$mac]，自动清除配对记忆！")
+                    preferenceManager.clearPairedMac()
+                    return@collect
+                }
                 _uiState.update {
                     it.copy(
                         pairedDeviceMac = mac,

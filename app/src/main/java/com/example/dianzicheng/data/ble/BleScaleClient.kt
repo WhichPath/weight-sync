@@ -192,17 +192,43 @@ class BleScaleClient(private val context: Context) {
     }
 
     /**
-     * 综合多维度规则判断某个扫描结果是否来自目标体脂秤设备。
+     * 判断设备名称是否属于阿福/沃莱体脂秤（如 AFU-WL-TZ-A1）。
+     */
+    fun isAfuDeviceName(name: String?): Boolean {
+        if (name.isNullOrBlank()) return false
+        val n = name.trim().uppercase(Locale.ROOT)
+        return n.startsWith("AFU") ||
+               n.contains("AFU") ||
+               n.contains("WL-TZ") ||
+               n.contains("TZ-A1") ||
+               n.contains("沃莱")
+    }
+
+    /**
+     * 从安卓系统已配对（Bonded）蓝牙设备列表中直接检索阿福体脂秤。
+     * 用户如果在系统设置里点击过配对，可以直接免扫描立即获取！
+     */
+    fun getBondedAfuDevice(): BluetoothDevice? {
+        return try {
+            bluetoothAdapter?.bondedDevices?.firstOrNull { dev ->
+                isAfuDeviceName(dev.name)
+            }
+        } catch (e: SecurityException) {
+            null
+        }
+    }
+
+    /**
+     * 综合多维度规则严格判断某个扫描结果是否来自阿福体脂秤（AFU-WL-TZ-A1）。
      *
-     * 匹配优先级（由高到低）：
-     * 1. 已配对 MAC 地址精确匹配（最高优先级，直接返回 true）。
-     * 2. 广播包中包含厂商私有服务 UUID（0000FFB0）。
-     * 3. 设备名称包含特定体脂秤关键词（AFU / WL-TZ / TZ-A1 / Scale / Weight / 体脂 / 电子秤 / WL）。
-     * 4. 原始广播包含 ASCII 关键词 "AFU" / "WL-TZ"。
-     * 5. 广播原始数据中厂商数据（0xFF）段的首字节为 0xAC 帧头。
+     * 关键改进：
+     * 1. 明确剔除任何非阿福设备（如房间内的云麦 yunmai、小米 mi 等广播秤），杜绝无关设备拦截抢占扫描！
+     * 2. 优先匹配设备名包含 AFU / WL-TZ / TZ-A1；
+     * 3. 匹配阿福私有服务 UUID（0000FFB0 / 000027AC）与厂商专用代码（0x27AC / 10156）；
+     * 4. 彻底移除泛化的 "Scale" / "Weight" / "WL" 等模糊匹配词。
      *
      * @param result BLE 扫描回调返回的单条扫描结果。
-     * @return 判定为目标设备返回 true，否则返回 false。
+     * @return 判定为阿福体脂秤返回 true，否则返回 false。
      */
     private fun isScaleAdvertisement(result: ScanResult): Boolean {
         val device = result.device
@@ -214,37 +240,41 @@ class BleScaleClient(private val context: Context) {
             ?: scanRecord?.deviceName 
             ?: parseNameFromBytes(rawBytes)
 
-        AppLogger.d(TAG, "扫描中... 发现设备: '$deviceName' [${device.address}] RSSI: ${result.rssi} UUIDs: $serviceUuids")
+        AppLogger.d(TAG, "扫描发现设备: '$deviceName' [${device.address}] RSSI: ${result.rssi}")
 
-        // 1. 已配对过的 MAC 地址精确匹配
+        // 1. 坚决排除明确的第三方无关设备（如云麦 Yunmai、小米等），防止抢占阿福扫描通道
+        if (deviceName != null) {
+            val upper = deviceName.uppercase(Locale.ROOT)
+            if (upper.contains("YUNMAI") || upper.contains("XIAOMI") || upper.contains("MISCALE") || upper.contains("MIBFS")) {
+                return false
+            }
+        }
+
+        // 2. 已配对过的 MAC 地址精确匹配（且不能为已知非阿福设备）
         val isMatchedMac = !lastPairedMac.isNullOrEmpty() && device.address.equals(lastPairedMac, ignoreCase = true)
         if (isMatchedMac) return true
 
-        // 2. 阿福体脂秤 Service UUID 匹配 (0000FFB0)
-        val hasService = serviceUuids?.any { it.uuid == SERVICE_UUID_AFU } == true
-        if (hasService) return true
+        // 3. 设备名称匹配阿福体脂秤核心特征（AFU / AFU-WL-TZ-A1 / WL-TZ / TZ-A1 / 沃莱）
+        if (isAfuDeviceName(deviceName)) return true
 
-        // 3. 称重设备常见品牌与关键词精确匹配
-        val nameMatched = deviceName?.let { name ->
-            name.contains("AFU", ignoreCase = true) ||
-            name.contains("WL-TZ", ignoreCase = true) ||
-            name.contains("TZ-A1", ignoreCase = true) ||
-            name.contains("Scale", ignoreCase = true) ||
-            name.contains("Weight", ignoreCase = true) ||
-            name.contains("体脂", ignoreCase = true) ||
-            name.contains("电子秤", ignoreCase = true) ||
-            name.contains("体重", ignoreCase = true) ||
-            name.contains("WL", ignoreCase = true) ||
-            name.contains("沃莱", ignoreCase = true)
-        } == true
-        if (nameMatched) return true
-
-        // 4. 原始广播包中 ASCII 匹配 "AFU" / "WL-TZ" / "TZ-A1"
+        // 4. 原始广播包中 ASCII 字节匹配 "AFU" / "WL-TZ" / "TZ-A1"
         if (containsAscii(rawBytes, "AFU") || containsAscii(rawBytes, "WL-TZ") || containsAscii(rawBytes, "TZ-A1")) {
             return true
         }
 
-        // 5. 解析 BLE 广播数据中的厂商自定义数据包结构 (0xFF 或 0x16)，校验 0xAC 帧头
+        // 5. 阿福体脂秤 Service UUID 匹配 (0000FFB0 或 000027AC)
+        val hasService = serviceUuids?.any {
+            val u = it.uuid.toString().uppercase(Locale.ROOT)
+            u.startsWith("0000FFB0") || u.startsWith("000027AC")
+        } == true
+        if (hasService) return true
+
+        // 6. 沃莱/阿福专用厂商代码匹配 (0x27AC / 10156)
+        if (scanRecord != null && scanRecord.getManufacturerSpecificData(0x27AC) != null) {
+            return true
+        }
+
+        // 7. 解析 BLE 广播数据中的厂商自定义数据包结构 (0xFF 或 0x16)，校验 0x27AC 厂商代码或 0xAC 帧头
         var hasValidAcHeader = false
         if (rawBytes != null && rawBytes.size >= 6) {
             var i = 0
@@ -253,8 +283,14 @@ class BleScaleClient(private val context: Context) {
                 if (len == 0 || i + len >= rawBytes.size) break
                 val type = rawBytes[i + 1].toInt() and 0xFF
                 if ((type == 0xFF || type == 0x16) && len > 1) {
-                    val firstDataByte = rawBytes[i + 2].toInt() and 0xFF
-                    if (firstDataByte == 0xAC) {
+                    val b0 = rawBytes[i + 2].toInt() and 0xFF
+                    val b1 = if (i + 3 < rawBytes.size) rawBytes[i + 3].toInt() and 0xFF else 0
+                    // 0xAC 0x27 为沃莱/阿福 16位 Company ID (0x27AC)
+                    if (b0 == 0xAC && b1 == 0x27) {
+                        hasValidAcHeader = true
+                        break
+                    }
+                    if (b0 == 0xAC) {
                         hasValidAcHeader = true
                         break
                     }
@@ -420,6 +456,18 @@ class BleScaleClient(private val context: Context) {
         AppLogger.i(TAG, "启动 BLE 扫描 (isPairingMode: $isPairingMode, pairedMac: $lastPairedMac)...")
         _connectionState.value = ConnectionState.SCANNING
 
+        // 若尚未记住 MAC 且非手动配对模式，优先检查安卓系统蓝牙已配对的阿福体脂秤，直连无需扫描！
+        if (lastPairedMac.isNullOrEmpty() && !isPairingMode) {
+            getBondedAfuDevice()?.let { bonded ->
+                val name = bonded.name ?: "AFU-WL-TZ-A1"
+                AppLogger.i(TAG, "从安卓系统已配对设备中发现阿福体脂秤: $name [${bonded.address}]，直接发起连接！")
+                lastPairedMac = bonded.address
+                onMacDiscovered?.invoke(bonded.address)
+                connect(bonded)
+                return
+            }
+        }
+
         // 构建低延迟扫描参数配置
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)  // 最低延迟，最快发现设备
@@ -447,8 +495,22 @@ class BleScaleClient(private val context: Context) {
     fun startPairingScan() {
         AppLogger.i(TAG, "启动设备手动配对扫描...")
         isPairingMode = true
-        _discoveredScales.value = emptyList()
-        _discoveredDevice.value = null
+        val list = mutableListOf<DiscoveredScaleDevice>()
+        // 优先从安卓系统已配对设备中检查阿福体脂秤
+        getBondedAfuDevice()?.let { bonded ->
+            val name = bonded.name ?: "AFU-WL-TZ-A1"
+            AppLogger.i(TAG, "从安卓系统已配对列表中发现阿福体脂秤: $name [${bonded.address}]")
+            list.add(
+                DiscoveredScaleDevice(
+                    name = "$name (系统已配对)",
+                    address = bonded.address,
+                    rssi = -50,
+                    isBroadcastScale = false
+                )
+            )
+        }
+        _discoveredScales.value = list
+        _discoveredDevice.value = list.firstOrNull()?.let { Pair(it.name, it.address) }
         startScan()
     }
 
