@@ -58,14 +58,16 @@ class GarminFitEncoderTest {
     fun testBodyAlgorithmCoverage() {
         val profile = UserProfile(
             sex = Sex.MALE,
-            heightCm = 178,
-            birthDate = "1998-05-15"
+            heightCm = 178.0,
+            birthDateEpochMs = 895190400000L // 1998-05-15
         )
 
-        val metrics = BodyAlgorithm.calculateAllMetrics(
+        val metrics = BodyAlgorithm.calculate(
             weightKg = 72.0,
             impedanceOhm = 500.0,
-            profile = profile
+            sex = profile.sex,
+            heightCm = profile.heightCm,
+            birthDateEpochMs = profile.birthDateEpochMs
         )
 
         assertTrue("BMI 必须合理", metrics.bmi in 15.0..35.0)
@@ -76,5 +78,26 @@ class GarminFitEncoderTest {
         assertTrue("基础代谢必须合理", metrics.basalMetKcal in 1000.0..2500.0)
         assertTrue("内脏脂肪等级必须大于0", metrics.visceralFatRating in 1..20)
         assertTrue("身体年龄必须在有效范围", metrics.metabolicAge in 15..80)
+    }
+
+    @Test
+    fun testBodyAlgorithmWithoutImpedance() {
+        val profile = UserProfile(
+            sex = Sex.FEMALE,
+            heightCm = 162.0,
+            birthDateEpochMs = 946684800000L // 2000-01-01
+        )
+
+        val metrics = BodyAlgorithm.calculate(
+            weightKg = 55.0,
+            impedanceOhm = 0.0,
+            sex = profile.sex,
+            heightCm = profile.heightCm,
+            birthDateEpochMs = profile.birthDateEpochMs
+        )
+
+        assertTrue("BMI 必须合理", metrics.bmi in 15.0..30.0)
+        assertTrue("无阻抗体脂率必须合理", metrics.bodyFatPct in 15.0..40.0)
+        assertTrue("水分率必须合理", metrics.waterPct in 40.0..70.0)
     }
 }
