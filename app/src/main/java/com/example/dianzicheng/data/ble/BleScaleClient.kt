@@ -42,15 +42,8 @@ class BleScaleClient(private val context: Context) {
     /** 当前活跃的 GATT 连接实例；未连接时为 null。 */
     private var bluetoothGatt: BluetoothGatt? = null
 
-    /** 支持的体脂秤/体重秤服务 UUID 集合，用于广播过滤与服务匹配 */
-    private val SUPPORTED_SERVICE_UUIDS = setOf(
-        MultiScalePacketParser.UUID_SERVICE_AFU,              // 0xFFB0 (AFU 私有协议)
-        MultiScalePacketParser.UUID_SERVICE_SIG_WSS,         // 0x181D (蓝牙 SIG 标准体重秤)
-        MultiScalePacketParser.UUID_SERVICE_SIG_BCS,         // 0x181B (蓝牙 SIG 标准体脂秤/小米)
-        MultiScalePacketParser.UUID_SERVICE_CHIPSEA_OKOK,    // 0xFFF0 (芯海科技 / OKOK 方案)
-        MultiScalePacketParser.UUID_SERVICE_GENERIC_FFE0,    // 0xFFE0 (通用透传秤)
-        MultiScalePacketParser.UUID_SERVICE_XIAOMI_WECHAT    // 0xFEE7 (小米/微信运动秤)
-    )
+    /** 阿福体脂秤私有服务 UUID（0000FFB0），用于广播过滤与服务匹配 */
+    val SERVICE_UUID_AFU: UUID = UUID.fromString("0000FFB0-0000-1000-8000-00805F9B34FB")
 
     // -------------------------------------------------------------------------
     // 对外暴露的 StateFlow 状态流
@@ -227,8 +220,8 @@ class BleScaleClient(private val context: Context) {
         val isMatchedMac = !lastPairedMac.isNullOrEmpty() && device.address.equals(lastPairedMac, ignoreCase = true)
         if (isMatchedMac) return true
 
-        // 2. 支持的体脂秤/体重秤 Service UUID 匹配（含 AFU 0000FFB0 及其他支持的 UUID）
-        val hasService = serviceUuids?.any { it.uuid in SUPPORTED_SERVICE_UUIDS } == true
+        // 2. 阿福体脂秤 Service UUID 匹配 (0000FFB0)
+        val hasService = serviceUuids?.any { it.uuid == SERVICE_UUID_AFU } == true
         if (hasService) return true
 
         // 3. 称重设备常见品牌与关键词精确匹配
@@ -241,16 +234,17 @@ class BleScaleClient(private val context: Context) {
             name.contains("体脂", ignoreCase = true) ||
             name.contains("电子秤", ignoreCase = true) ||
             name.contains("体重", ignoreCase = true) ||
-            name.contains("WL", ignoreCase = true)
+            name.contains("WL", ignoreCase = true) ||
+            name.contains("沃莱", ignoreCase = true)
         } == true
         if (nameMatched) return true
 
-        // 4. 原始广播包中 ASCII 匹配 "AFU" / "WL-TZ"
+        // 4. 原始广播包中 ASCII 匹配 "AFU" / "WL-TZ" / "TZ-A1"
         if (containsAscii(rawBytes, "AFU") || containsAscii(rawBytes, "WL-TZ") || containsAscii(rawBytes, "TZ-A1")) {
             return true
         }
 
-        // 5. 解析 BLE 广播数据中的厂商自定义数据包结构 (0xFF)，校验 0xAC 帧头
+        // 5. 解析 BLE 广播数据中的厂商自定义数据包结构 (0xFF 或 0x16)，校验 0xAC 帧头
         var hasValidAcHeader = false
         if (rawBytes != null && rawBytes.size >= 6) {
             var i = 0
@@ -258,8 +252,7 @@ class BleScaleClient(private val context: Context) {
                 val len = rawBytes[i].toInt() and 0xFF
                 if (len == 0 || i + len >= rawBytes.size) break
                 val type = rawBytes[i + 1].toInt() and 0xFF
-                // 仅检查厂商数据（0xFF）类型的 AD 段，且长度至少 5 字节
-                if (type == 0xFF && len >= 5) {
+                if ((type == 0xFF || type == 0x16) && len > 1) {
                     val firstDataByte = rawBytes[i + 2].toInt() and 0xFF
                     if (firstDataByte == 0xAC) {
                         hasValidAcHeader = true
@@ -285,21 +278,15 @@ class BleScaleClient(private val context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
 
-            // 若已记住特定设备 MAC，严格防止误连周围其他无关设备
-            val targetMac = lastPairedMac
-            if (!targetMac.isNullOrEmpty() && !device.address.equals(targetMac, ignoreCase = true)) {
-                return
-            }
-
-            // 过滤判断该广播结果是否来自目标体脂秤
+            // 过滤判断该广播结果是否来自阿福体脂秤
             if (isScaleAdvertisement(result)) {
                 val rawBytes = result.scanRecord?.bytes
                 val name = (try { device.name } catch (e: SecurityException) { null })
                     ?: result.scanRecord?.deviceName
                     ?: parseNameFromBytes(rawBytes)
-                    ?: "体脂秤设备 (${device.address.takeLast(5)})"
+                    ?: "阿福体脂秤 (${device.address.takeLast(5)})"
                 val rawAdvHex = rawBytes?.joinToString(" ") { "%02X".format(it) } ?: "null"
-                AppLogger.i(TAG, "扫描匹配到体脂秤: $name [${device.address}], RSSI: ${result.rssi}, 广播数据: $rawAdvHex")
+                AppLogger.i(TAG, "扫描匹配到阿福体脂秤! 设备: $name [${device.address}], RSSI: ${result.rssi}, 广播数据: $rawAdvHex")
 
                 // 更新发现设备列表与最新设备流
                 val currentList = _discoveredScales.value.toMutableList()
@@ -318,9 +305,14 @@ class BleScaleClient(private val context: Context) {
                 _discoveredScales.value = currentList
                 _discoveredDevice.value = Pair(name, device.address)
 
-                // 阿福体脂秤（GATT 双向通信秤）：踏秤即连！
+                // 若处于手动配对模式，仅上报候选列表供用户手动选择
+                if (isPairingMode) {
+                    return
+                }
+
+                // 阿福体脂秤：踏秤即连！
                 // 停止扫描，记录 MAC 并发起 GATT 连接
-                AppLogger.i(TAG, "自动连接目标体脂秤 GATT: $name [${device.address}]")
+                AppLogger.i(TAG, "自动连接阿福体脂秤 GATT: $name [${device.address}]")
                 stopScan()
                 lastPairedMac = device.address
                 onMacDiscovered?.invoke(device.address)
@@ -750,14 +742,15 @@ class BleScaleClient(private val context: Context) {
     private fun handleIncomingData(data: ByteArray, charUuid: String) {
         // 将原始数据格式化为十六进制字符串打印，记录原始蓝牙数据
         val hexStr = data.joinToString(" ") { "%02X".format(it) }
-        val scaleResult = MultiScalePacketParser.parseNotification(data, charUuid)
+        val weightData = AFUPacketParser.parseWeight(data)
+        val impData = AFUPacketParser.parseImpedance(data)
 
         val parsedDetails = buildString {
-            if (scaleResult != null) {
-                append(" [${scaleResult.protocolName}] | 体重=${String.format(Locale.US, "%.2f", scaleResult.weightKg)}kg, 锁定=${scaleResult.isStable}")
-                if (scaleResult.impedanceOhm != null) {
-                    append(", 阻抗=${scaleResult.impedanceOhm.toInt()}Ω")
-                }
+            if (weightData != null) {
+                append(" [AFU] | 体重=${String.format(Locale.US, "%.2f", weightData.weightKg)}kg, 锁定=${weightData.isStable}")
+            }
+            if (impData != null) {
+                append(", 阻抗=${impData.toInt()}Ω")
             }
         }
         AppLogger.d(TAG, "收到原始蓝牙数据: $hexStr$parsedDetails")
@@ -778,7 +771,7 @@ class BleScaleClient(private val context: Context) {
         handler.postDelayed(watchdog, 2500)  // 2500ms 无数据则认为用户已下秤
 
         // 更新测量结果
-        scaleResult?.let { result ->
+        weightData?.let { result ->
             val prevWeight = _weight.value
             _weight.value = result.weightKg
             if (result.weightKg > 0.0) {
@@ -801,12 +794,12 @@ class BleScaleClient(private val context: Context) {
                     _connectionState.value = ConnectionState.CONNECTED
                 }
             }
+        }
 
-            result.impedanceOhm?.let { imp ->
-                // 人体生物电阻抗（BIA）必须基于真实人体踩秤且读数稳定锁定时才能接收
-                if (imp > 0.0 && _isStable.value && (_weight.value >= 3.0 || result.weightKg >= 3.0)) {
-                    _impedance.value = imp
-                }
+        impData?.let { imp ->
+            // 人体生物电阻抗（BIA）必须基于真实人体踩秤且读数稳定锁定时才能接收
+            if (imp > 0.0 && _isStable.value && _weight.value >= 3.0) {
+                _impedance.value = imp
             }
         }
     }

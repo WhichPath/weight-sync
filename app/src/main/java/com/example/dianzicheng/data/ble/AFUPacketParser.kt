@@ -90,26 +90,23 @@ object AFUPacketParser {
         // 未找到帧头则无法解析
         if (offset == -1) return null
 
-        // 优先尝试 7~8 字节（标准 AFU 协议：data[7]=高位, data[8]=低位）
-        if (data.size - offset >= 9) {
-            val imp7 = data[offset + 7].toInt() and 0xFF  // 阻抗高字节
-            val imp8 = data[offset + 8].toInt() and 0xFF  // 阻抗低字节
-            // 将两字节合并为 16 位无符号整数（大端序）
-            val impA = (imp7 shl 8) or imp8
-            // 校验阻抗值是否落在人体 BIA 有效范围内
-            if (impA in 100..1500) {
-                return impA.toDouble()
+        // 优先尝试 8~9 字节（标准 AFU 硬件协议：data[8]=高位, data[9]=低位，如 0x0540 = 1344Ω）
+        if (data.size - offset >= 10) {
+            val imp8 = data[offset + 8].toInt() and 0xFF  // 阻抗高字节
+            val imp9 = data[offset + 9].toInt() and 0xFF  // 阻抗低字节
+            val impB = (imp8 shl 8) or imp9
+            if (impB in 100..1500) {
+                return impB.toDouble()
             }
         }
 
-        // 备用：尝试 8~9 字节
-        if (data.size - offset >= 10) {
-            val imp8 = data[offset + 8].toInt() and 0xFF  // 备用阻抗高字节
-            val imp9 = data[offset + 9].toInt() and 0xFF  // 备用阻抗低字节
-            val impB = (imp8 shl 8) or imp9
-            // 同样校验有效范围
-            if (impB in 100..1500) {
-                return impB.toDouble()
+        // 备用：尝试 7~8 字节（部分衍生型号）
+        if (data.size - offset >= 9) {
+            val imp7 = data[offset + 7].toInt() and 0xFF  // 备用阻抗高字节
+            val imp8 = data[offset + 8].toInt() and 0xFF  // 备用阻抗低字节
+            val impA = (imp7 shl 8) or imp8
+            if (impA in 100..1500) {
+                return impA.toDouble()
             }
         }
 
