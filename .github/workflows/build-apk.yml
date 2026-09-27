@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -29,12 +29,12 @@ jobs:
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Build with Gradle (Assemble Debug)
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build with Gradle (Assemble Release)
+        run: ./gradlew assembleRelease --stacktrace
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: weight-sync-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: weight-sync-release-apk
+          path: app/build/outputs/apk/release/*.apk
           retention-days: 30
