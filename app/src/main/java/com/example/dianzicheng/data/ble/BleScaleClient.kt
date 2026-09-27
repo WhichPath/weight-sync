@@ -775,8 +775,8 @@ class BleScaleClient(private val context: Context) {
             val prevWeight = _weight.value
             _weight.value = result.weightKg
             if (result.weightKg > 0.0) {
-                // 只有当体重 >= 3.0kg 时才判定为有效稳定锁定（防止单脚踩秤或轻微压秤时的误锁定）
-                val validStable = result.isStable && (result.weightKg >= 3.0)
+                // 只有当体重 >= 10.0kg 时才判定为有效稳定锁定（防止单脚踩秤、唤醒轻触或零点漂移时的误锁定）
+                val validStable = result.isStable && (result.weightKg >= 10.0)
                 // 若之前非稳定现在变稳定，或者稳定体重变化超出 1.5kg，重置阻抗为 0.0 等待本次稳定后的阻抗读数
                 if (validStable && (!_isStable.value || kotlin.math.abs(result.weightKg - prevWeight) > 1.5)) {
                     _impedance.value = 0.0
@@ -797,8 +797,8 @@ class BleScaleClient(private val context: Context) {
         }
 
         impData?.let { imp ->
-            // 人体生物电阻抗（BIA）必须基于真实人体踩秤且读数稳定锁定时才能接收
-            if (imp > 0.0 && _isStable.value && _weight.value >= 3.0) {
+            // 人体生物电阻抗（BIA）必须基于真实人体踩秤且读数稳定锁定时才能接收（>= 10.0kg）
+            if (imp > 0.0 && _isStable.value && _weight.value >= 10.0) {
                 _impedance.value = imp
             }
         }

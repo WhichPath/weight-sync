@@ -21,8 +21,11 @@ class ScaleRepository(private val dao: ScaleDao) {
     suspend fun getAllMeasurements(): List<BodyMeasurement> =
         dao.getAllMeasurementsList().map { it.toDomain() }
 
-    /** 保存或更新一条测量记录（相同 ID 自动覆盖最新值） */
-    suspend fun saveMeasurement(measurement: BodyMeasurement): BodyMeasurement {
+    /** 保存或更新一条测量记录（相同 ID 自动覆盖最新值，坚决拦截 < 10.0kg 的无效/零点记录） */
+    suspend fun saveMeasurement(measurement: BodyMeasurement): BodyMeasurement? {
+        if (measurement.weightKg < 10.0) {
+            return null
+        }
         val finalRecord = if (measurement.id.isBlank()) {
             measurement.copy(id = UUID.randomUUID().toString())
         } else {
@@ -30,6 +33,11 @@ class ScaleRepository(private val dao: ScaleDao) {
         }
         dao.insertMeasurement(finalRecord.toEntity())
         return finalRecord
+    }
+
+    /** 清理历史中遗留的低于 10.0kg 的无效记录 */
+    suspend fun purgeInvalidMeasurements() {
+        dao.purgeInvalidMeasurements()
     }
 
     /** 标记记录为已同步 Garmin */

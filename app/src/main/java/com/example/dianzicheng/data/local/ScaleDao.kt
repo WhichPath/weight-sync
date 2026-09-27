@@ -9,13 +9,17 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ScaleDao {
 
-    /** 获取所有测量记录（Flow 实时流，按时间倒序） */
-    @Query("SELECT * FROM measurements ORDER BY measuredAtEpochMs DESC")
+    /** 获取所有有效测量记录（过滤掉历史中可能存在的 < 10.0kg 脏数据，Flow 实时流，按时间倒序） */
+    @Query("SELECT * FROM measurements WHERE weightKg >= 10.0 ORDER BY measuredAtEpochMs DESC")
     fun getAllMeasurements(): Flow<List<MeasurementEntity>>
 
-    /** 一次性获取所有测量记录列表（按时间倒序） */
-    @Query("SELECT * FROM measurements ORDER BY measuredAtEpochMs DESC")
+    /** 一次性获取所有有效测量记录列表（按时间倒序） */
+    @Query("SELECT * FROM measurements WHERE weightKg >= 10.0 ORDER BY measuredAtEpochMs DESC")
     suspend fun getAllMeasurementsList(): List<MeasurementEntity>
+
+    /** 清理历史中遗留的低于 10.0kg 的无效/零点脏数据 */
+    @Query("DELETE FROM measurements WHERE weightKg < 10.0")
+    suspend fun purgeInvalidMeasurements()
 
     /** 获取所有尚未同步到 Garmin 的测量记录 */
     @Query("SELECT * FROM measurements WHERE syncedToGarmin = 0 ORDER BY measuredAtEpochMs ASC")
