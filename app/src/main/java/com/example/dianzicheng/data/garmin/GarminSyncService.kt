@@ -3,6 +3,7 @@ package com.example.dianzicheng.data.garmin
 import android.content.Context
 import com.example.dianzicheng.data.local.AppLogger
 import com.example.dianzicheng.data.local.ScaleDao
+import com.example.dianzicheng.data.local.toDomain
 import com.example.dianzicheng.domain.BodyMeasurement
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

@@ -52,13 +52,17 @@ object AppLogger {
         val level: Level,
         val tag: String,
         val message: String
-    )
+    ) {
+        val time: String
+            get() = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(timestamp))
+    }
 
     /** 内部可变日志流（写端），日志 UI 监听此 Flow */
     private val _entries = MutableStateFlow<List<LogEntry>>(emptyList())
 
     /** 对外只读日志流，供 UI 组件通过 collectAsState() 订阅 */
     val entries: StateFlow<List<LogEntry>> = _entries.asStateFlow()
+    val logs: StateFlow<List<LogEntry>> get() = entries
 
     /** 环形缓冲区，使用 ArrayDeque 支持高效头尾操作 */
     private val buffer = ArrayDeque<LogEntry>(MAX_ENTRIES + 1)

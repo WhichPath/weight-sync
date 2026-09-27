@@ -22,6 +22,21 @@ import androidx.compose.ui.unit.sp
 import com.example.dianzicheng.data.ble.BleScaleClient
 import com.example.dianzicheng.domain.BodyMeasurement
 
+@Composable
+fun DashboardScreen(
+    viewModel: ScaleViewModel,
+    onNavigateToPairing: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    DashboardScreen(
+        uiState = uiState,
+        onStartScan = { viewModel.startPairingScan() },
+        onNavigateToPairing = onNavigateToPairing,
+        modifier = modifier
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(

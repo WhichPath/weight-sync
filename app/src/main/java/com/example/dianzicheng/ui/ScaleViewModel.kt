@@ -265,6 +265,8 @@ class ScaleViewModel(
         }
     }
 
+    fun pairAndConnectDevice(device: BleScaleClient.DiscoveredScaleDevice) = manualConnect(device)
+
     fun disconnectAndReset() {
         viewModelScope.launch {
             preferenceManager.clearPairedMac()

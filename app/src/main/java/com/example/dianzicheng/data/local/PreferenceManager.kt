@@ -101,6 +101,19 @@ class PreferenceManager(private val context: Context) {
         }
     }
 
+    suspend fun savePairedMac(mac: String) {
+        context.dataStore.edit {
+            it[PAIRED_MAC] = mac
+            it[PAIRING_COMPLETE] = true
+        }
+    }
+
+    suspend fun setPairingComplete(complete: Boolean) {
+        context.dataStore.edit {
+            it[PAIRING_COMPLETE] = complete
+        }
+    }
+
     suspend fun clearPairedMac() {
         context.dataStore.edit {
             it.remove(PAIRED_MAC)
