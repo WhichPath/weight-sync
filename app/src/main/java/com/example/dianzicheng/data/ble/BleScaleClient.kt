@@ -76,6 +76,11 @@ class BleScaleClient(private val context: Context) {
     /** 生物电阻抗值，单位 Ω（外部只读）。 */
     val impedance: StateFlow<Double> = _impedance
 
+    /** 主动重置阻抗状态（用于开始新一轮测量） */
+    fun resetImpedance() {
+        _impedance.value = 0.0
+    }
+
     /**
      * 扫描到的体脂秤设备信息：Pair<设备显示名称, MAC 地址>（内部可写）。
      * null 表示尚未发现设备。
@@ -774,17 +779,22 @@ class BleScaleClient(private val context: Context) {
 
         // 更新测量结果
         scaleResult?.let { result ->
+            val prevWeight = _weight.value
             _weight.value = result.weightKg
             if (result.weightKg > 0.0) {
                 // 只有当体重 >= 3.0kg 时才判定为有效稳定锁定（防止单脚踩秤或轻微压秤时的误锁定）
                 val validStable = result.isStable && (result.weightKg >= 3.0)
+                // 若之前非稳定现在变稳定，或者稳定体重变化超出 1.5kg，重置阻抗为 0.0 等待本次稳定后的阻抗读数
+                if (validStable && (!_isStable.value || kotlin.math.abs(result.weightKg - prevWeight) > 1.5)) {
+                    _impedance.value = 0.0
+                }
                 _isStable.value = validStable
                 if (validStable) {
                     // 体重稳定锁定后切换到测量状态，通知 UI 开始体成分计算
                     _connectionState.value = ConnectionState.MEASURING
                 }
-            } else if (result.weightKg <= 0.0 && result.impedanceOhm == null) {
-                // 仅当体重为 0 且无阻抗数据时，才清除稳定标志和阻抗，并立即切回已连接状态
+            } else {
+                // 收到体重归零（下秤或复位报文）
                 _isStable.value = false
                 _impedance.value = 0.0
                 if (_connectionState.value == ConnectionState.MEASURING) {
@@ -793,8 +803,8 @@ class BleScaleClient(private val context: Context) {
             }
 
             result.impedanceOhm?.let { imp ->
-                // 人体生物电阻抗（BIA）必须基于真实人体踩秤（体重 >= 3.0kg）才能测得，空秤时禁止接收阻抗
-                if (imp > 0.0 && (_weight.value >= 3.0 || result.weightKg >= 3.0)) {
+                // 人体生物电阻抗（BIA）必须基于真实人体踩秤且读数稳定锁定时才能接收
+                if (imp > 0.0 && _isStable.value && (_weight.value >= 3.0 || result.weightKg >= 3.0)) {
                     _impedance.value = imp
                 }
             }

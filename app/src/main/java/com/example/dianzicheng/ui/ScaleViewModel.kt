@@ -99,13 +99,40 @@ class ScaleViewModel(
             bleClient.weight.collect { weight ->
                 _uiState.update { it.copy(liveWeightKg = weight) }
 
+                // 过早锁定作废保护：秤可能在单脚踩秤或体重爬升过程中误报稳定（如 7kg 误报）
+                // 若实际体重随后显著超出锁定值（> 3.0kg），说明那次锁定是瞬态误报，必须作废旧会话！
+                val session = currentSession
+                if (session != null && weight > session.lockedWeightKg + 3.0) {
+                    AppLogger.w(TAG, "检测到过早锁定误报 (锁定 ${String.format("%.2f", session.lockedWeightKg)}kg < 实时 ${String.format("%.2f", weight)}kg)，作废旧会话 ${session.id.take(8)}")
+                    if (session.isCommitted) {
+                        val staleId = session.id
+                        viewModelScope.launch {
+                            try {
+                                repository.deleteMeasurementById(staleId)
+                                AppLogger.i(TAG, "已成功从数据库中清除过早误锁记录: id=${staleId.take(8)}")
+                            } catch (e: Exception) {
+                                AppLogger.e(TAG, "清除过早记录失败: ${e.message}")
+                            }
+                        }
+                    }
+                    currentSession = null
+                    _uiState.update { it.copy(currentMeasurement = null, impedanceOhm = 0.0) }
+                }
+
                 if (weight <= 0.0) {
                     // 用户离秤：若已有锁定体重但尚未落库（如穿袜无阻抗直接下秤），此时兜底提交
-                    val session = currentSession
-                    if (session != null && !session.isCommitted && session.lockedWeightKg >= 3.0) {
-                        AppLogger.i(TAG, "用户下秤，提交无阻抗称重记录: ${session.lockedWeightKg}kg")
-                        session.isCommitted = true
-                        commitSession(session)
+                    val cur = currentSession
+                    if (cur != null && !cur.isCommitted && cur.lockedWeightKg >= 3.0) {
+                        AppLogger.i(TAG, "用户下秤，提交无阻抗称重记录: ${cur.lockedWeightKg}kg")
+                        cur.isCommitted = true
+                        commitSession(cur)
+                    }
+                    // 延迟 1.5 秒清除会话，给可能延迟到达的阻抗留出时间窗口
+                    viewModelScope.launch {
+                        delay(1500)
+                        if (bleClient.weight.value <= 0.0) {
+                            currentSession = null
+                        }
                     }
                 }
             }
@@ -120,9 +147,11 @@ class ScaleViewModel(
                     if (w >= 3.0) {
                         val session = currentSession
                         if (session == null || abs(w - session.lockedWeightKg) > 1.5) {
-                            // 开启全新会话
+                            // 开启全新会话，并重置阻抗等待本次测量
                             val newSession = ActiveSession(lockedWeightKg = w)
                             currentSession = newSession
+                            bleClient.resetImpedance()
+                            _uiState.update { it.copy(impedanceOhm = 0.0) }
                             AppLogger.i(TAG, "体重锁定稳定: ${String.format("%.2f", w)} kg (Session ${newSession.id.take(8)})")
                             updateCurrentDisplay(newSession)
                         } else {
@@ -140,8 +169,10 @@ class ScaleViewModel(
             bleClient.impedance.collect { imp ->
                 _uiState.update { it.copy(impedanceOhm = imp) }
                 val session = currentSession
-                if (imp > 0.0 && session != null && session.lockedWeightKg >= 3.0) {
-                    AppLogger.i(TAG, "收到有效阻抗: ${imp.toInt()} Ω，生成完整身体成分并立即保存")
+                val liveWeight = bleClient.weight.value
+                val lockStillValid = liveWeight <= 0.0 || liveWeight <= (session?.lockedWeightKg ?: 0.0) + 3.0
+                if (imp > 0.0 && session != null && session.lockedWeightKg >= 3.0 && lockStillValid) {
+                    AppLogger.i(TAG, "收到有效阻抗: ${imp.toInt()} Ω，生成完整身体成分并立即保存 (Session ${session.id.take(8)})")
                     session.lockedImpedanceOhm = imp
                     session.isCommitted = true
                     commitSession(session)

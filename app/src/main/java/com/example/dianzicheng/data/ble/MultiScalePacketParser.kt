@@ -62,8 +62,11 @@ object MultiScalePacketParser {
 
         val uuidStr = charUuid?.uppercase() ?: ""
 
-        // 1. 优先尝试 AFU 协议（含 0xAC 帧头，原有协议兼容）
-        parseAfu(data)?.let { return it }
+        // 1. 如果是 AFU 私有特征 (0000FFB2...)，或者数据包含 0xAC 报头，严格只走 AFU 协议解析，坚决禁止回退到其他协议！
+        // 彻底杜绝 AFU 秤端空载/复位/握手应答帧被跨协议误判为小米/OKOK，产生 29kg 等荒谬读数
+        if (uuidStr.contains("FFB2") || (data.isNotEmpty() && (data[0].toInt() and 0xFF) == 0xAC)) {
+            return parseAfu(data)
+        }
 
         // 2. 尝试 Bluetooth SIG 国际标准特征 (0x2A9D Weight Measurement / 0x2A9C Body Composition)
         if (uuidStr.contains("2A9C")) {
@@ -73,16 +76,10 @@ object MultiScalePacketParser {
             parseBluetoothSigWss(data)?.let { return it }
         }
 
-        // 3. 尝试小米/米家格式（如果设备以广播格式通过 GATT 通知发送）
-        parseXiaomiPayload(data)?.let { return it }
-
-        // 4. 尝试 OKOK / 芯海科技 / 香山等通用格式
-        parseOkokChipsea(data)?.let { return it }
-
-        // 5. 再次尝试 SIG 标准解析（仅在 UUID 未知或包含标准特征/服务时才尝试，避免盲目匹配无关特征）
-        if (uuidStr.isBlank() || uuidStr.contains("181D") || uuidStr.contains("181B")) {
-            parseBluetoothSigWss(data)?.let { return it }
-            parseBluetoothSigBcs(data)?.let { return it }
+        // 3. 仅在特征 UUID 包含对应标准服务或为空时，才尝试小米 / OKOK 等通用格式
+        if (uuidStr.isBlank() || uuidStr.contains("181D") || uuidStr.contains("181B") || uuidStr.contains("FFF0") || uuidStr.contains("FFE0")) {
+            parseXiaomiPayload(data)?.let { return it }
+            parseOkokChipsea(data)?.let { return it }
         }
 
         return null
@@ -138,9 +135,14 @@ object MultiScalePacketParser {
 
     private fun parseAfu(data: ByteArray): ParsedScaleData? {
         val weightData = AFUPacketParser.parseWeight(data) ?: return null
-        // 仅当体重 >= 3.0kg 时，阻抗才具备生理意义且允许稳定锁定；
-        // 当用户下秤发送 0.00kg 时正常上报，以便 UI 立即清除测量状态（避免 2.5 秒延迟），但阻抗必须置 null
-        val impedance = if (weightData.weightKg >= 3.0) AFUPacketParser.parseImpedance(data) else null
+        // 关键防护：
+        // 1. 只有当体重稳定锁定 (isStable == true) 且读数有效 (>= 3.0kg) 时，才允许解析阻抗！
+        // 2. 称重爬升中 (isStable == false) 或下秤 (weight == 0.0kg) 时，阻抗严格置 null，防止踩秤过程中产生假阻抗
+        val impedance = if (weightData.isStable && weightData.weightKg >= 3.0) {
+            AFUPacketParser.parseImpedance(data)
+        } else {
+            null
+        }
         return ParsedScaleData(
             weightKg = weightData.weightKg,
             isStable = weightData.isStable && weightData.weightKg >= 3.0,
