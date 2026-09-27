@@ -57,6 +57,19 @@ class ScaleViewModel(
         observeUserProfile()
         observeBle()
         observePreferences()
+        observeHistory()
+    }
+
+    private fun observeHistory() {
+        viewModelScope.launch {
+            repository.getHistory().collect { historyList ->
+                val latest = historyList.firstOrNull()
+                // 仅在当前没有活跃称重会话且主页未展示当前会话时，加载最新一次历史记录展示
+                if (latest != null && currentSession == null && _uiState.value.currentMeasurement == null) {
+                    _uiState.update { it.copy(currentMeasurement = latest) }
+                }
+            }
+        }
     }
 
     private fun observeUserProfile() {
@@ -116,7 +129,20 @@ class ScaleViewModel(
                         }
                     }
                     currentSession = null
-                    _uiState.update { it.copy(currentMeasurement = null, impedanceOhm = 0.0) }
+                    // 仅重置阻抗，不抹除卡片，等待随后真实稳定体重更新
+                    _uiState.update { it.copy(impedanceOhm = 0.0) }
+                }
+
+                // 稳定体重会话恢复与兜底保证：
+                // 若硬件处于稳定状态且有有效体重（>=3.0kg），但尚未创建会话或体重发生显著更新（>1.5kg），立即创建/更新会话！
+                if (bleClient.isStable.value && weight >= 3.0) {
+                    val s = currentSession
+                    if (s == null || abs(weight - s.lockedWeightKg) > 1.5) {
+                        val newSession = ActiveSession(lockedWeightKg = weight)
+                        currentSession = newSession
+                        AppLogger.i(TAG, "从稳定状态恢复/更新会话: ${String.format("%.2f", weight)} kg (Session ${newSession.id.take(8)})")
+                        updateCurrentDisplay(newSession)
+                    }
                 }
 
                 if (weight <= 0.0) {
@@ -150,7 +176,6 @@ class ScaleViewModel(
                             // 开启全新会话，并重置阻抗等待本次测量
                             val newSession = ActiveSession(lockedWeightKg = w)
                             currentSession = newSession
-                            bleClient.resetImpedance()
                             _uiState.update { it.copy(impedanceOhm = 0.0) }
                             AppLogger.i(TAG, "体重锁定稳定: ${String.format("%.2f", w)} kg (Session ${newSession.id.take(8)})")
                             updateCurrentDisplay(newSession)
