@@ -18,7 +18,6 @@ import com.example.dianzicheng.data.health.HealthConnectManager
 import com.example.dianzicheng.data.local.AppDatabase
 import com.example.dianzicheng.data.local.PreferenceManager
 import com.example.dianzicheng.data.repository.ScaleRepository
-import com.example.dianzicheng.service.ShizukuManager
 import com.example.dianzicheng.ui.HistoryViewModel
 import com.example.dianzicheng.ui.MainScreen
 import com.example.dianzicheng.ui.ProfileViewModel

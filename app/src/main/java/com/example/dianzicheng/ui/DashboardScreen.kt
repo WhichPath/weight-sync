@@ -1,6 +1,7 @@
 package com.example.dianzicheng.ui
 
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -23,7 +24,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dianzicheng.domain.BodyMeasurement
-import com.example.dianzicheng.service.ShizukuManager
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,7 +48,7 @@ fun DashboardScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("阿福数据同步", fontWeight = FontWeight.Bold)
                         Text(
-                            "v2.0.0 UI 自动化捕获",
+                            "v2.0.2 纯原生无障碍抓取",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -67,11 +67,19 @@ fun DashboardScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. 服务与授权状态卡片
+            // 1. 无障碍服务状态与快速设置引导
             ServiceStatusCard(
                 uiState = uiState,
-                onEnableViaShizuku = { viewModel.enableAccessibilityViaShizuku() },
-                onRequestShizukuPerm = { ShizukuManager.requestPermission(1001) },
+                onOpenAppDetails = {
+                    try {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                },
                 onOpenAccessibilitySettings = {
                     try {
                         context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -147,7 +155,7 @@ fun DashboardScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "激活服务后，打开阿福 App 测秤并进入身体成分详情页，系统将自动识别并上传。",
+                            "开启无障碍服务后，打开阿福 App 测秤并展开身体指标记录弹窗，系统将自动识别全量 17 项指标供你核对。",
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.outline
@@ -162,8 +170,7 @@ fun DashboardScreen(
 @Composable
 private fun ServiceStatusCard(
     uiState: ScaleUiState,
-    onEnableViaShizuku: () -> Unit,
-    onRequestShizukuPerm: () -> Unit,
+    onOpenAppDetails: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onLaunchAfu: () -> Unit,
     onRefresh: () -> Unit
@@ -184,7 +191,7 @@ private fun ServiceStatusCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "服务监控面板",
+                    "无障碍服务状态",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -196,70 +203,102 @@ private fun ServiceStatusCard(
             // 状态指示条
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                StatusBadge(
-                    label = "Shizuku 服务",
-                    isActive = uiState.isShizukuRunning,
-                    activeText = "运行中",
-                    inactiveText = "未启动"
-                )
-                StatusBadge(
-                    label = "Shizuku 授权",
-                    isActive = uiState.hasShizukuPermission,
-                    activeText = "已授权",
-                    inactiveText = "未授权"
-                )
                 StatusBadge(
                     label = "无障碍监听",
                     isActive = uiState.isAccessibilityEnabled,
-                    activeText = "已激活",
-                    inactiveText = "未激活"
+                    activeText = "已开启 (正常监听)",
+                    inactiveText = "未开启"
                 )
-            }
 
-            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-            // 操作按键
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (!uiState.hasShizukuPermission && uiState.isShizukuRunning) {
+                if (uiState.isAccessibilityEnabled) {
                     Button(
-                        onClick = onRequestShizukuPerm,
-                        modifier = Modifier.weight(1f)
+                        onClick = onLaunchAfu,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text("申请 Shizuku 授权", fontSize = 13.sp)
-                    }
-                } else if (!uiState.isAccessibilityEnabled) {
-                    Button(
-                        onClick = onEnableViaShizuku,
-                        enabled = uiState.hasShizukuPermission,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.FlashOn, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("一键 Shizuku 激活", fontSize = 13.sp)
+                        Text("打开阿福 App", fontSize = 13.sp)
                     }
-                }
-
-                OutlinedButton(
-                    onClick = onLaunchAfu,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("打开阿福 App", fontSize = 13.sp)
                 }
             }
 
-            if (!uiState.isAccessibilityEnabled && !uiState.hasShizukuPermission) {
-                TextButton(
-                    onClick = onOpenAccessibilitySettings,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
+            if (!uiState.isAccessibilityEnabled) {
+                Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Android 13+ 受限制设置引导卡片
+                Card(
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("无 Shizuku？点此前往系统设置手动开启无障碍服务", fontSize = 12.sp)
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "重要：若系统设置里本服务是灰色的",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Text(
+                            "Android 13+ 对自行安装的应用有安全限制。若在无障碍列表中开关呈灰色且点开提示受限制，请按以下步骤解除：\n" +
+                                    "1. 点击下方【1. 前往应用信息】，进入本 App 详情页\n" +
+                                    "2. 点击右上角『三个点 (⋮)』\n" +
+                                    "3. 点击『允许受限制的设置』并验证锁屏密码\n" +
+                                    "4. 点击下方【2. 前往无障碍设置】，开关即可正常开启！",
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // 操作按键
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenAppDetails,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("1. 前往应用信息", fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = onOpenAccessibilitySettings,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Accessibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("2. 前往无障碍设置", fontSize = 12.sp)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onLaunchAfu,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("打开阿福 App", fontSize = 13.sp)
+                    }
                 }
             }
         }
@@ -273,7 +312,7 @@ private fun StatusBadge(
     activeText: String,
     inactiveText: String
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(horizontalAlignment = Alignment.Start) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
         Spacer(modifier = Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -283,11 +322,11 @@ private fun StatusBadge(
                     .clip(CircleShape)
                     .background(if (isActive) Color(0xFF4CAF50) else Color(0xFFF44336))
             )
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 if (isActive) activeText else inactiveText,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
             )
         }
     }

@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">阿福体脂同步</string>
     <string name="accessibility_service_desc">用于自动捕获阿福App身体成分详情页面的体重、体脂率等指标并同步至Garmin。</string>
+    <string name="accessibility_service_label">阿福数据自动提取服务</string>
 </resources>

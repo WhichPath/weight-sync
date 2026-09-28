@@ -58,6 +58,7 @@
         <!-- 阿福健康 UI 无障碍抓取服务 -->
         <service
             android:name=".service.AfuAccessibilityService"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
             <intent-filter>

@@ -10,8 +10,8 @@ import com.example.dianzicheng.data.local.PreferenceManager
 import com.example.dianzicheng.data.repository.ScaleRepository
 import com.example.dianzicheng.domain.BodyMeasurement
 import com.example.dianzicheng.domain.UserProfile
+import com.example.dianzicheng.service.AccessibilityUtils
 import com.example.dianzicheng.service.AfuAccessibilityService
-import com.example.dianzicheng.service.ShizukuManager
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -39,14 +39,10 @@ class ScaleViewModel(
     }
 
     fun refreshStatus() {
-        val isShizukuRunning = ShizukuManager.isShizukuRunning()
-        val hasShizukuPerm = ShizukuManager.hasPermission()
-        val isAccEnabled = ShizukuManager.isAccessibilityServiceEnabled(context) || AfuAccessibilityService.isServiceActive.value
+        val isAccEnabled = AccessibilityUtils.isAccessibilityServiceEnabled(context) || AfuAccessibilityService.isServiceActive.value
 
         _uiState.update {
             it.copy(
-                isShizukuRunning = isShizukuRunning,
-                hasShizukuPermission = hasShizukuPerm,
                 isAccessibilityEnabled = isAccEnabled
             )
         }
@@ -77,7 +73,7 @@ class ScaleViewModel(
 
         viewModelScope.launch {
             AfuAccessibilityService.isServiceActive.collect { active ->
-                _uiState.update { it.copy(isAccessibilityEnabled = active || ShizukuManager.isAccessibilityServiceEnabled(context)) }
+                _uiState.update { it.copy(isAccessibilityEnabled = active || AccessibilityUtils.isAccessibilityServiceEnabled(context)) }
             }
         }
     }
@@ -88,30 +84,6 @@ class ScaleViewModel(
             if (list.isNotEmpty()) {
                 _uiState.update { it.copy(currentMeasurement = list.first()) }
             }
-        }
-    }
-
-    /**
-     * 通过 Shizuku 静默启用无障碍服务
-     */
-    fun enableAccessibilityViaShizuku() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(lastLogMessage = "正在通过 Shizuku 激活无障碍服务...") }
-            val result = ShizukuManager.enableAccessibilityServiceSilently()
-            if (result.isSuccess) {
-                _uiState.update {
-                    it.copy(
-                        isAccessibilityEnabled = true,
-                        lastLogMessage = "无障碍服务已成功激活！"
-                    )
-                }
-            } else {
-                val err = result.exceptionOrNull()?.message ?: "未知错误"
-                _uiState.update {
-                    it.copy(lastLogMessage = "激活失败: $err")
-                }
-            }
-            refreshStatus()
         }
     }
 

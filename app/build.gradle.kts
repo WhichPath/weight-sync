@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.dianzicheng"
         minSdk = 35
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.0.1"
+        versionCode = 13
+        versionName = "2.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,8 +45,6 @@ android {
 }
 
 dependencies {
-    implementation(libs.shizuku.api)
-    implementation(libs.shizuku.provider)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
