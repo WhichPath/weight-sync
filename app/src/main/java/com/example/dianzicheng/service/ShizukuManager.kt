@@ -37,12 +37,7 @@ object ShizukuManager {
     fun hasPermission(): Boolean {
         if (!isShizukuRunning()) return false
         return try {
-            if (Shizuku.isPre_V11()) {
-                // v11 之前不可用
-                false
-            } else {
-                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-            }
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         } catch (e: Throwable) {
             false
         }
