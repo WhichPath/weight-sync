@@ -11,12 +11,17 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 private const val TAG = "ShizukuManager"
-private const val SERVICE_COMPONENT = "com.example.dianzicheng/com.example.dianzicheng.service.AfuAccessibilityService"
 
+/**
+ * Shizuku 服务交互与特权执行管理器。
+ * 负责检测 Shizuku 存活、请求权限，以及在具备授权后通过底层 shell 写入 Secure Settings 静默启用无障碍服务。
+ */
 object ShizukuManager {
 
+    private const val SERVICE_COMPONENT = "com.example.dianzicheng/com.example.dianzicheng.service.AfuAccessibilityService"
+
     /**
-     * 检查 Shizuku 守护进程是否在运行
+     * 检测 Shizuku 服务当前是否正在运行且 Binder 存活
      */
     fun isShizukuRunning(): Boolean {
         return try {
@@ -27,12 +32,17 @@ object ShizukuManager {
     }
 
     /**
-     * 检查是否已获得 Shizuku 权限
+     * 检测本应用是否已被授予 Shizuku 权限
      */
     fun hasPermission(): Boolean {
         if (!isShizukuRunning()) return false
         return try {
-            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+            if (Shizuku.isPre_V11()) {
+                // v11 之前不可用
+                false
+            } else {
+                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+            }
         } catch (e: Throwable) {
             false
         }
@@ -46,7 +56,7 @@ object ShizukuManager {
             try {
                 Shizuku.requestPermission(requestCode)
             } catch (e: Throwable) {
-                AppLogger.e(TAG, "请求 Shizuku 权限失败", e)
+                AppLogger.e(TAG, "请求 Shizuku 权限失败: ${e.message}")
             }
         }
     }
@@ -68,7 +78,7 @@ object ShizukuManager {
     }
 
     /**
-     * 执行底层 Shell 命令（通过 Shizuku）
+     * 执行底层 Shell 命令（通过 Shizuku 运行）
      */
     suspend fun executeCommand(command: String): Result<String> = withContext(Dispatchers.IO) {
         if (!hasPermission()) {
@@ -76,7 +86,15 @@ object ShizukuManager {
         }
 
         try {
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+            val newProcessMethod = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            newProcessMethod.isAccessible = true
+            val process = newProcessMethod.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
+
             val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
             val error = BufferedReader(InputStreamReader(process.errorStream)).use { it.readText() }
             val exitCode = process.waitFor()
@@ -87,7 +105,7 @@ object ShizukuManager {
                 Result.failure(RuntimeException("Shell 执行失败(code=$exitCode): $error"))
             }
         } catch (e: Throwable) {
-            AppLogger.e(TAG, "执行 Shizuku 命令异常: $command", e)
+            AppLogger.e(TAG, "执行 Shizuku 命令异常: $command: ${e.message}")
             Result.failure(e)
         }
     }
@@ -124,7 +142,7 @@ object ShizukuManager {
             AppLogger.i(TAG, "通过 Shizuku 成功静默激活无障碍服务: $SERVICE_COMPONENT")
             Result.success(Unit)
         } catch (e: Throwable) {
-            AppLogger.e(TAG, "静默激活无障碍服务失败", e)
+            AppLogger.e(TAG, "静默激活无障碍服务失败: ${e.message}")
             Result.failure(e)
         }
     }

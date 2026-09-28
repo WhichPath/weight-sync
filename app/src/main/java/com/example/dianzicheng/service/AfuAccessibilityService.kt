@@ -116,7 +116,7 @@ class AfuAccessibilityService : AccessibilityService() {
             }
 
             // 2. 自动上传 Garmin
-            val isGarminLoggedIn = garminAuthManager.isLoggedIn()
+            val isGarminLoggedIn = preferenceManager.isGarminLoggedIn.first()
             if (isGarminLoggedIn) {
                 _lastScrapeLog.value = "正在上传 Garmin (${savedRecord.weightKg}kg)..."
                 val uploadResult = garminSyncService.uploadMeasurement(savedRecord)
