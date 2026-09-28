@@ -336,8 +336,12 @@ private fun CapturedMeasurementCard(
                     ) {
                         if (isSyncing) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("上传中...")
                         } else {
-                            Text("同步 Garmin")
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("确认上传至 Garmin")
                         }
                     }
                 }
@@ -360,7 +364,7 @@ private fun CapturedMeasurementCard(
 
             Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-            // 多项身体指标网格
+            // 多项身体指标网格（镜像阿福 17 项全量数据）
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     MetricItem("BMI", "${measurement.bmi}")
@@ -368,14 +372,19 @@ private fun CapturedMeasurementCard(
                     MetricItem("骨量", "${measurement.boneMassKg} kg")
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MetricItem("水分率", "${measurement.waterPct}%")
-                    MetricItem("蛋白质", "${measurement.proteinPct}%")
+                    MetricItem("体水分率", "${measurement.waterPct}%")
+                    MetricItem("蛋白占比", "${measurement.proteinPct}%")
                     MetricItem("内脏脂肪", "${measurement.visceralFatRating} 级")
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     MetricItem("基础代谢", "${measurement.basalMetKcal.toInt()} kcal")
-                    MetricItem("身体年龄", "${measurement.metabolicAge} 岁")
-                    MetricItem("数据来源", "阿福官方")
+                    MetricItem("脂肪量", if (measurement.fatMassKg > 0) "${measurement.fatMassKg} kg" else "--")
+                    MetricItem("骨骼肌量", if (measurement.skeletalMuscleKg > 0) "${measurement.skeletalMuscleKg} kg" else "--")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    MetricItem("肌肉率", if (measurement.musclePct > 0) "${measurement.musclePct}%" else "--")
+                    MetricItem("皮下脂肪率", if (measurement.subcutaneousFatPct > 0) "${measurement.subcutaneousFatPct}%" else "--")
+                    MetricItem("骨量占比", if (measurement.boneMassPct > 0) "${measurement.boneMassPct}%" else "--")
                 }
             }
 

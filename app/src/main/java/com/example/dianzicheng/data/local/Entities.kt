@@ -24,5 +24,14 @@ data class MeasurementEntity(
     val basalMetKcal: Double = 0.0,
     val metabolicAge: Int = 25,
     val syncedToGarmin: Boolean = false,
-    val syncedToGarminAtEpochMs: Long? = null
+    val syncedToGarminAtEpochMs: Long? = null,
+    val fatMassKg: Double = 0.0,
+    val subcutaneousFatPct: Double = 0.0,
+    val subcutaneousFatKg: Double = 0.0,
+    val boneMassPct: Double = 0.0,
+    val musclePct: Double = 0.0,
+    val waterKg: Double = 0.0,
+    val proteinKg: Double = 0.0,
+    val skeletalMusclePct: Double = 0.0,
+    val skeletalMuscleKg: Double = 0.0
 )
