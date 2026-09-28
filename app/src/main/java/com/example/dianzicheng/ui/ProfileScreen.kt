@@ -242,39 +242,26 @@ fun ProfileScreen(
                 }
             }
 
-            // ── 4. 已绑定体脂秤 ────────────────────────────────────────────
+            // ── 4. 数据获取模式 ─────────────────────────────────────────
             item {
-                SectionHeader("体脂秤设备")
+                SectionHeader("数据获取模式")
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("设备名称", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(pairedDeviceName ?: "未配对", fontWeight = FontWeight.Bold)
+                            Text("工作模式", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("无障碍 UI 自动化截获", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("MAC 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(pairedMac ?: "--", fontFamily = FontFamily.Monospace)
-                        }
-                        if (!pairedMac.isNullOrEmpty()) {
-                            OutlinedButton(
-                                onClick = { showUnpairConfirmDialog = true },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("解除绑定 / 重新配对")
-                            }
-                        }
+                        Text(
+                            text = "本版本已移除蓝牙直连扫描逻辑。无需配对电子秤，只需在阿福 App 测秤后打开身体指标详情页，即可自动提取 100% 官方计算指标并上传 Garmin。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

@@ -15,8 +15,11 @@ lifecycle = "2.8.7"
 ksp = "2.3.6"
 healthConnect = "1.1.0-alpha10"
 okhttp = "4.12.0"
+shizuku = "13.1.5"
 
 [libraries]
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

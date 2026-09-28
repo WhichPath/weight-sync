@@ -13,7 +13,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
-
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.NavGraph.Companion.findStartDestination
 
@@ -21,23 +20,15 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 fun MainScreen(
     scaleViewModel: ScaleViewModel,
     historyViewModel: HistoryViewModel,
-    profileViewModel: ProfileViewModel,
-    isPairingComplete: Boolean,
-    onPairingComplete: () -> Unit,
-    onResetPairing: () -> Unit = { profileViewModel.resetPairing() }
+    profileViewModel: ProfileViewModel
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    val items = listOf("测量", "历史", "我的")
+    val items = listOf("抓取", "历史", "设置")
     val routes = listOf("dashboard", "history", "profile")
     val icons = listOf(Icons.Default.Home, Icons.Default.DateRange, Icons.Default.Person)
-
-    if (!isPairingComplete) {
-        PairingScreen(scaleViewModel, onPairingComplete)
-        return
-    }
 
     Scaffold(
         bottomBar = {
@@ -74,10 +65,7 @@ fun MainScreen(
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("dashboard") {
-                DashboardScreen(
-                    viewModel = scaleViewModel,
-                    onNavigateToPairing = onResetPairing
-                )
+                DashboardScreen(viewModel = scaleViewModel)
             }
             composable("history") { 
                 HistoryScreen(

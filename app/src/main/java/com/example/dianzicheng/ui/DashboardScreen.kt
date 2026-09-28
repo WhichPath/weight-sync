@@ -1,5 +1,7 @@
 package com.example.dianzicheng.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -15,48 +17,43 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.dianzicheng.data.ble.BleScaleClient
 import com.example.dianzicheng.domain.BodyMeasurement
-
-@Composable
-fun DashboardScreen(
-    viewModel: ScaleViewModel,
-    onNavigateToPairing: () -> Unit = {},
-    modifier: Modifier = Modifier
-) {
-    val uiState by viewModel.uiState.collectAsState()
-
-    // 连接空闲时自动启动低延迟扫描，实现踏秤即连
-    LaunchedEffect(uiState.connection) {
-        if (uiState.connection == BleScaleClient.ConnectionState.IDLE) {
-            viewModel.startScanning()
-        }
-    }
-
-    DashboardScreen(
-        uiState = uiState,
-        onStartScan = { viewModel.startScanning() },
-        onNavigateToPairing = onNavigateToPairing,
-        modifier = modifier
-    )
-}
+import com.example.dianzicheng.service.ShizukuManager
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
-    uiState: ScaleUiState,
-    onStartScan: () -> Unit,
-    onNavigateToPairing: () -> Unit = {},
+    viewModel: ScaleViewModel,
     modifier: Modifier = Modifier
 ) {
+    val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshStatus()
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("阿福体脂秤", fontWeight = FontWeight.Bold) },
+                title = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("阿福数据同步", fontWeight = FontWeight.Bold)
+                        Text(
+                            "v2.0.0 UI 自动化捕获",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent)
             )
         },
@@ -67,154 +64,327 @@ fun DashboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // ── 连接状态提示条 ────────────────────────────────────────────────
-            ConnectionStatusChip(
-                connection = uiState.connection,
-                isDeviceRemembered = uiState.isDeviceRemembered,
-                onNavigateToPairing = onNavigateToPairing,
-                onStartScan = onStartScan
+            // 1. 服务与授权状态卡片
+            ServiceStatusCard(
+                uiState = uiState,
+                onEnableViaShizuku = { viewModel.enableAccessibilityViaShizuku() },
+                onRequestShizukuPerm = { ShizukuManager.requestPermission(1001) },
+                onOpenAccessibilitySettings = {
+                    try {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                },
+                onLaunchAfu = {
+                    val launchIntent = context.packageManager.getLaunchIntentForPackage("com.antgroup.aijk.android")
+                    if (launchIntent != null) {
+                        context.startActivity(launchIntent)
+                    }
+                },
+                onRefresh = { viewModel.refreshStatus() }
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // ── 核心体重仪表圆盘 ──────────────────────────────────────────────
-            val displayWeight = if (uiState.liveWeightKg > 0.0) {
-                uiState.liveWeightKg
-            } else {
-                uiState.currentMeasurement?.weightKg ?: 0.0
+            // 2. 状态反馈与实时日志条目
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = uiState.lastLogMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            WeightDisplayCircle(
-                weightKg = displayWeight,
-                isMeasuring = uiState.connection == BleScaleClient.ConnectionState.MEASURING || uiState.isStable,
-                impedanceOhm = uiState.impedanceOhm
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // ── Garmin 同步状态提示 ───────────────────────────────────────────
-            if (uiState.isGarminSyncing || uiState.garminSyncResult != null) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(bottom = 16.dp)
+            // 3. 最近捕获记录卡片
+            uiState.currentMeasurement?.let { measurement ->
+                CapturedMeasurementCard(
+                    measurement = measurement,
+                    isSyncing = uiState.isGarminSyncing,
+                    syncResult = uiState.garminSyncResult,
+                    onSyncGarmin = { viewModel.syncCurrentToGarmin() }
+                )
+            } ?: run {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        if (uiState.isGarminSyncing) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("正在上传至 Garmin...", fontSize = 12.sp)
+                        Icon(
+                            imageVector = Icons.Default.Visibility,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "暂无捕获数据",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "激活服务后，打开阿福 App 测秤并进入身体成分详情页，系统将自动识别并上传。",
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServiceStatusCard(
+    uiState: ScaleUiState,
+    onEnableViaShizuku: () -> Unit,
+    onRequestShizukuPerm: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onLaunchAfu: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "服务监控面板",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新状态")
+                }
+            }
+
+            // 状态指示条
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                StatusBadge(
+                    label = "Shizuku 服务",
+                    isActive = uiState.isShizukuRunning,
+                    activeText = "运行中",
+                    inactiveText = "未启动"
+                )
+                StatusBadge(
+                    label = "Shizuku 授权",
+                    isActive = uiState.hasShizukuPermission,
+                    activeText = "已授权",
+                    inactiveText = "未授权"
+                )
+                StatusBadge(
+                    label = "无障碍监听",
+                    isActive = uiState.isAccessibilityEnabled,
+                    activeText = "已激活",
+                    inactiveText = "未激活"
+                )
+            }
+
+            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // 操作按键
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (!uiState.hasShizukuPermission && uiState.isShizukuRunning) {
+                    Button(
+                        onClick = onRequestShizukuPerm,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("申请 Shizuku 授权", fontSize = 13.sp)
+                    }
+                } else if (!uiState.isAccessibilityEnabled) {
+                    Button(
+                        onClick = onEnableViaShizuku,
+                        enabled = uiState.hasShizukuPermission,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.FlashOn, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("一键 Shizuku 激活", fontSize = 13.sp)
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onLaunchAfu,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("打开阿福 App", fontSize = 13.sp)
+                }
+            }
+
+            if (!uiState.isAccessibilityEnabled && !uiState.hasShizukuPermission) {
+                TextButton(
+                    onClick = onOpenAccessibilitySettings,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Text("无 Shizuku？点此前往系统设置手动开启无障碍服务", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusBadge(
+    label: String,
+    isActive: Boolean,
+    activeText: String,
+    inactiveText: String
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (isActive) Color(0xFF4CAF50) else Color(0xFFF44336))
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                if (isActive) activeText else inactiveText,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+private fun CapturedMeasurementCard(
+    measurement: BodyMeasurement,
+    isSyncing: Boolean,
+    syncResult: String?,
+    onSyncGarmin: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("最近捕获数据", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    val timeStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                        .format(Date(measurement.measuredAtEpochMs))
+                    Text(timeStr, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                }
+
+                if (measurement.syncedToGarmin) {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text("Garmin 已同步", color = Color(0xFF2E7D32)) },
+                        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32)) }
+                    )
+                } else {
+                    Button(
+                        onClick = onSyncGarmin,
+                        enabled = !isSyncing,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Default.CloudDone, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(6.dp))
-                            Text(uiState.garminSyncResult ?: "", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                            Text("同步 Garmin")
                         }
                     }
                 }
             }
 
-            // ── 详细身体指标卡片（持久显示本次或最近一次测量） ───────────────
-            val measurement = uiState.currentMeasurement
-            if (measurement != null) {
-                MeasurementSummaryCard(measurement = measurement)
-            } else {
-                EmptyPromptCard(
-                    isDeviceRemembered = uiState.isDeviceRemembered,
-                    onNavigateToPairing = onNavigateToPairing
-                )
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-        }
-    }
-}
-
-@Composable
-private fun ConnectionStatusChip(
-    connection: BleScaleClient.ConnectionState,
-    isDeviceRemembered: Boolean,
-    onNavigateToPairing: () -> Unit,
-    onStartScan: () -> Unit
-) {
-    if (!isDeviceRemembered) {
-        AssistChip(
-            onClick = onNavigateToPairing,
-            label = { Text("未配对设备，点击去配对") },
-            leadingIcon = { Icon(Icons.Default.BluetoothSearching, contentDescription = null) }
-        )
-    } else {
-        val (text, color, icon) = when (connection) {
-            BleScaleClient.ConnectionState.CONNECTED -> Triple("体脂秤已连接，请上秤", MaterialTheme.colorScheme.primary, Icons.Default.BluetoothConnected)
-            BleScaleClient.ConnectionState.MEASURING -> Triple("正在称重与测量体脂...", MaterialTheme.colorScheme.tertiary, Icons.Default.Speed)
-            BleScaleClient.ConnectionState.CONNECTING -> Triple("正在连接体脂秤...", MaterialTheme.colorScheme.secondary, Icons.Default.BluetoothSearching)
-            BleScaleClient.ConnectionState.SCANNING -> Triple("正在搜索体脂秤...", MaterialTheme.colorScheme.secondary, Icons.Default.BluetoothSearching)
-            BleScaleClient.ConnectionState.IDLE -> Triple("空闲中，点击连接", MaterialTheme.colorScheme.outline, Icons.Default.Bluetooth)
-        }
-
-        Surface(
-            onClick = { if (connection == BleScaleClient.ConnectionState.IDLE) onStartScan() },
-            shape = CircleShape,
-            color = color.copy(alpha = 0.12f)
-        ) {
+            // 核心数值
             Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(text, color = color, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${measurement.weightKg}", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
+                    Text("体重 (kg)", style = MaterialTheme.typography.labelMedium)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${measurement.bodyFatPct}%", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
+                    Text("体脂率", style = MaterialTheme.typography.labelMedium)
+                }
             }
-        }
-    }
-}
 
-@Composable
-private fun WeightDisplayCircle(
-    weightKg: Double,
-    isMeasuring: Boolean,
-    impedanceOhm: Double
-) {
-    Surface(
-        modifier = Modifier.size(240.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        border = androidx.compose.foundation.BorderStroke(
-            4.dp,
-            if (isMeasuring) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-        )
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = String.format("%.2f", weightKg),
-                fontSize = 54.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = (-1).sp
-            )
-            Text(
-                text = "kg",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.outline
-            )
-            if (impedanceOhm > 0.0) {
-                Spacer(Modifier.height(6.dp))
+            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // 多项身体指标网格
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    MetricItem("BMI", "${measurement.bmi}")
+                    MetricItem("肌肉量", "${measurement.muscleKg} kg")
+                    MetricItem("骨量", "${measurement.boneMassKg} kg")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    MetricItem("水分率", "${measurement.waterPct}%")
+                    MetricItem("蛋白质", "${measurement.proteinPct}%")
+                    MetricItem("内脏脂肪", "${measurement.visceralFatRating} 级")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    MetricItem("基础代谢", "${measurement.basalMetKcal.toInt()} kcal")
+                    MetricItem("身体年龄", "${measurement.metabolicAge} 岁")
+                    MetricItem("数据来源", "阿福官方")
+                }
+            }
+
+            if (syncResult != null) {
                 Text(
-                    text = "阻抗: ${impedanceOhm.toInt()} Ω",
-                    fontSize = 12.sp,
+                    syncResult,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
             }
         }
@@ -222,73 +392,12 @@ private fun WeightDisplayCircle(
 }
 
 @Composable
-private fun MeasurementSummaryCard(measurement: BodyMeasurement) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+private fun RowScope.MetricItem(label: String, value: String) {
+    Column(
+        modifier = Modifier.weight(1f),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Text(
-                text = "本次测量身体成分",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                DetailMetric("BMI", String.format("%.1f", measurement.bmi), "")
-                DetailMetric("体脂率", if (measurement.bodyFatPct > 0) "${measurement.bodyFatPct}%" else "--", "")
-                DetailMetric("水分率", if (measurement.waterPct > 0) "${measurement.waterPct}%" else "--", "")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                DetailMetric("肌肉量", if (measurement.muscleKg > 0) "${measurement.muscleKg} kg" else "--", "")
-                DetailMetric("骨量", if (measurement.boneMassKg > 0) "${measurement.boneMassKg} kg" else "--", "")
-                DetailMetric("基础代谢", if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()} kcal" else "--", "")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                DetailMetric("内脏脂肪", if (measurement.visceralFatRating > 0) "${measurement.visceralFatRating} 级" else "--", "")
-                DetailMetric("身体年龄", if (measurement.metabolicAge > 0) "${measurement.metabolicAge} 岁" else "--", "")
-                DetailMetric("Garmin 同步", if (measurement.syncedToGarmin) "已完成" else "待同步", "")
-            }
-        }
-    }
-}
-
-@Composable
-private fun EmptyPromptCard(
-    isDeviceRemembered: Boolean,
-    onNavigateToPairing: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (isDeviceRemembered) "请赤脚站上体脂秤，稍等片刻即可获得多维身体指标并自动同步至 Garmin" else "请先点击上方配对您的阿福体脂秤",
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline
-            )
-        }
-    }
-}
-
-@Composable
-private fun DetailMetric(title: String, value: String, unit: String) {
-    Column(modifier = Modifier.width(96.dp)) {
-        Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-        Spacer(Modifier.height(2.dp))
-        Text("$value$unit", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(value, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
     }
 }
