@@ -10,12 +10,10 @@ import java.util.regex.Pattern
 import kotlin.math.roundToInt
 
 /**
- * 阿福 App (爱健康) 界面文本解析器。
- * 从无障碍服务抓取到的屏幕文本节点列表中提取完整的 17 项身体成分指标，以及日期时间戳。
+ * 阿福 App (爱健康) “身体指标记录”详情面板文本解析器。
+ * 专门解析用户主动点击【测量详情】后弹出的指标详情面板，精准提取全部 17 项指标。
  */
 object AfuUiParser {
-
-    private val NUMBER_PATTERN = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)")
 
     data class ParseResult(
         val measurement: BodyMeasurement,
@@ -28,14 +26,14 @@ object AfuUiParser {
 
     /**
      * 从文本列表中提取测量日期和时间。
-     * 例如："2026年9月28日" 与 "共1条记录，更新于08:14" 或 "08:14"。
+     * 支持例如："2026年9月28日" 与 "共1条记录，更新于08:14" 或 "08:14"。
      */
     fun extractDateTime(texts: List<String>): Pair<String, String> {
         var dateStr: String? = null
         var timeStr: String? = null
 
-        val dateRegex = Regex("(\\d{4})年(\\d{1,2})月(\\d{1,2})日")
-        val timeRegex = Regex("(?:更新于)?\\s*([0-2]?\\d:[0-5]\\d)")
+        val dateRegex = Regex("""(\d{4})年(\d{1,2})月(\d{1,2})日""")
+        val timeRegex = Regex("""(?:更新于)?\s*([0-2]?\d:[0-5]\d)""")
 
         for (text in texts) {
             if (dateStr == null) {
@@ -74,131 +72,219 @@ object AfuUiParser {
     }
 
     /**
-     * 解析文本列表。
-     * @param texts 屏幕节点在阅读顺序下提取出的文本列表
-     * @param userProfile 当前用户配置（用于辅助计算缺失的 BMI 等）
+     * 精确解析阿福“身体指标记录”详情面板文本。
      */
     fun parseScreenTexts(texts: List<String>, userProfile: UserProfile): ParseResult? {
         val cleanTexts = texts.map { it.trim() }.filter { it.isNotEmpty() }
         if (cleanTexts.isEmpty()) return null
 
+        // 严格模式：只针对详情面板。如果文本中完全没有“身体指标记录”和“内脏脂肪”，说明不在详情面板内，不予解析
+        val isInsideDetailPanel = cleanTexts.any { it.contains("身体指标记录") } ||
+                (cleanTexts.any { it.contains("内脏脂肪") } && cleanTexts.any { it.contains("体脂率") })
+        if (!isInsideDetailPanel) return null
+
         val matches = mutableMapOf<String, Double>()
 
-        for (i in cleanTexts.indices) {
-            val text = cleanTexts[i]
+        // 辅助提取器：优先在单行文本内匹配正则，若单行内只有标签，则检查相邻下一行是否为纯数值
+        fun matchField(
+            targetKey: String,
+            singleLineRegex: Regex,
+            exactLabelPred: (String) -> Boolean,
+            validRange: ClosedFloatingPointRange<Double>
+        ) {
+            if (matches[targetKey] != null) return
 
-            // 1. 体重 (10.0 ~ 250.0 kg)
-            if (matches["weight"] == null && isWeightLabel(text)) {
-                findNearbyNumber(cleanTexts, i, 10.0..250.0)?.let { matches["weight"] = it }
-            }
+            for (i in cleanTexts.indices) {
+                val text = cleanTexts[i]
 
-            // 2. 内脏脂肪等级 (1.0 ~ 30.0)
-            if (matches["visceral"] == null && text.contains("内脏脂肪")) {
-                findNearbyNumber(cleanTexts, i, 1.0..30.0)?.let { matches["visceral"] = it }
-            }
+                // 排除干扰文本（例如带有“项异常”、“较上次”、“身材管理”的节点）
+                if (text.contains("项异常") || text.contains("较上次") || text.contains("身材管理")) continue
 
-            // 3. 体脂率 (3.0% ~ 65.0%)，排除“皮下脂肪率”
-            if (matches["fat"] == null && text.contains("体脂率") && !text.contains("皮下")) {
-                findNearbyNumber(cleanTexts, i, 3.0..65.0)?.let { matches["fat"] = it }
-            }
+                // 1. 单行内直接匹配出数值
+                val m = singleLineRegex.find(text)
+                if (m != null) {
+                    val num = m.groupValues[1].toDoubleOrNull()
+                    if (num != null && num in validRange) {
+                        matches[targetKey] = num
+                        return
+                    }
+                }
 
-            // 4. 脂肪量 (1.0 ~ 100.0 kg)，排除“皮下脂肪量”
-            if (matches["fatMass"] == null && text.contains("脂肪量") && !text.contains("皮下")) {
-                findNearbyNumber(cleanTexts, i, 1.0..100.0)?.let { matches["fatMass"] = it }
-            }
-
-            // 5. 皮下脂肪率 (1.0% ~ 60.0%)
-            if (matches["subFatPct"] == null && text.contains("皮下脂肪率")) {
-                findNearbyNumber(cleanTexts, i, 1.0..60.0)?.let { matches["subFatPct"] = it }
-            }
-
-            // 6. 皮下脂肪量 (1.0 ~ 60.0 kg)
-            if (matches["subFatKg"] == null && text.contains("皮下脂肪量")) {
-                findNearbyNumber(cleanTexts, i, 1.0..60.0)?.let { matches["subFatKg"] = it }
-            }
-
-            // 7. 骨量占比 (0.5% ~ 15.0%)
-            if (matches["bonePct"] == null && text.contains("骨量占比")) {
-                findNearbyNumber(cleanTexts, i, 0.5..15.0)?.let { matches["bonePct"] = it }
-            }
-
-            // 8. 骨量 (0.5 ~ 10.0 kg)，排除“占比”和“率”
-            if (matches["bone"] == null && text.contains("骨量") && !text.contains("占比") && !text.contains("率")) {
-                findNearbyNumber(cleanTexts, i, 0.5..10.0)?.let { matches["bone"] = it }
-            }
-
-            // 9. 肌肉率 (10.0% ~ 95.0%)，排除“骨骼肌”
-            if (matches["musclePct"] == null && text.contains("肌肉率") && !text.contains("骨骼")) {
-                findNearbyNumber(cleanTexts, i, 10.0..95.0)?.let { matches["musclePct"] = it }
-            }
-
-            // 10. 肌肉量 (10.0 ~ 120.0 kg)，排除“骨骼肌量”
-            if (matches["muscle"] == null && text.contains("肌肉量") && !text.contains("骨骼")) {
-                findNearbyNumber(cleanTexts, i, 10.0..120.0)?.let { matches["muscle"] = it }
-            }
-
-            // 11. 体水分率 (20.0% ~ 85.0%)
-            if (matches["water"] == null && (text.contains("体水分率") || (text.contains("水分率") && !text.contains("量")))) {
-                findNearbyNumber(cleanTexts, i, 20.0..85.0)?.let { matches["water"] = it }
-            }
-
-            // 12. 体水分量 (10.0 ~ 100.0 kg)
-            if (matches["waterKg"] == null && (text.contains("体水分量") || (text.contains("水分量") && !text.contains("率")))) {
-                findNearbyNumber(cleanTexts, i, 10.0..100.0)?.let { matches["waterKg"] = it }
-            }
-
-            // 13. 蛋白量占比 / 蛋白质率 (5.0% ~ 40.0%)
-            if (matches["protein"] == null && (text.contains("蛋白量占比") || text.contains("蛋白质率"))) {
-                findNearbyNumber(cleanTexts, i, 5.0..40.0)?.let { matches["protein"] = it }
-            }
-
-            // 14. 蛋白量含量 / 蛋白质量 (2.0 ~ 30.0 kg)
-            if (matches["proteinKg"] == null && (text.contains("蛋白量含量") || text.contains("蛋白质量"))) {
-                findNearbyNumber(cleanTexts, i, 2.0..30.0)?.let { matches["proteinKg"] = it }
-            }
-
-            // 15. 骨骼肌率 (10.0% ~ 70.0%)
-            if (matches["skelMusclePct"] == null && text.contains("骨骼肌率")) {
-                findNearbyNumber(cleanTexts, i, 10.0..70.0)?.let { matches["skelMusclePct"] = it }
-            }
-
-            // 16. 骨骼肌量 (5.0 ~ 80.0 kg)
-            if (matches["skelMuscleKg"] == null && text.contains("骨骼肌量")) {
-                findNearbyNumber(cleanTexts, i, 5.0..80.0)?.let { matches["skelMuscleKg"] = it }
-            }
-
-            // 17. 基础代谢率 (500 ~ 4000 kcal)
-            if (matches["bmr"] == null && text.contains("基础代谢")) {
-                findNearbyNumber(cleanTexts, i, 500.0..4000.0)?.let { matches["bmr"] = it }
-            }
-
-            // 18. BMI (10.0 ~ 60.0)
-            if (matches["bmi"] == null && (text.equals("BMI", ignoreCase = true) || text.contains("体质指数") || text.startsWith("BMI "))) {
-                findNearbyNumber(cleanTexts, i, 10.0..60.0)?.let { matches["bmi"] = it }
-            }
-
-            // 19. 身体年龄 / 代谢年龄 (10 ~ 100)
-            if (matches["age"] == null && (text.contains("身体年龄") || text.contains("代谢年龄"))) {
-                findNearbyNumber(cleanTexts, i, 10.0..100.0)?.let { matches["age"] = it }
+                // 2. 当前行是标签，下一行为对应数值
+                if (exactLabelPred(text)) {
+                    if (i + 1 < cleanTexts.size) {
+                        val nextText = cleanTexts[i + 1]
+                        val nextNum = extractPureNumber(nextText)
+                        if (nextNum != null && nextNum in validRange) {
+                            matches[targetKey] = nextNum
+                            return
+                        }
+                    }
+                }
             }
         }
 
+        // 1. 体重 (kg)：例如 "体重 79.05 kg" 或 "体重 79.05"
+        // 排除“骨骼肌量”、“脂肪量”、“骨量”等
+        matchField(
+            targetKey = "weight",
+            singleLineRegex = Regex("""(?:^|\s)体重(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it == "体重" || it.startsWith("体重 ") || it.startsWith("体重:") },
+            validRange = 25.0..250.0
+        )
+
+        // 2. 体脂率 (%)：例如 "体脂率 24.3%"
+        // 排除“皮下脂肪率”
+        matchField(
+            targetKey = "fat",
+            singleLineRegex = Regex("""(?<!皮下)体脂率(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { (it == "体脂率" || it.startsWith("体脂率 ")) && !it.contains("皮下") },
+            validRange = 3.0..65.0
+        )
+
+        // 3. 内脏脂肪等级：例如 "内脏脂肪等级 11.0" 或 "内脏脂肪 11"
+        matchField(
+            targetKey = "visceral",
+            singleLineRegex = Regex("""内脏脂肪(?:等级)?(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)"""),
+            exactLabelPred = { it.contains("内脏脂肪") },
+            validRange = 1.0..30.0
+        )
+
+        // 4. 脂肪量 (kg)：例如 "脂肪量 19.2kg"
+        matchField(
+            targetKey = "fatMass",
+            singleLineRegex = Regex("""(?<!皮下)脂肪量(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it.contains("脂肪量") && !it.contains("皮下") },
+            validRange = 1.0..100.0
+        )
+
+        // 5. 皮下脂肪率 (%)：例如 "皮下脂肪率 17.4%"
+        matchField(
+            targetKey = "subFatPct",
+            singleLineRegex = Regex("""皮下脂肪率(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { it.contains("皮下脂肪率") },
+            validRange = 1.0..60.0
+        )
+
+        // 6. 皮下脂肪量 (kg)：例如 "皮下脂肪量 13.8kg"
+        matchField(
+            targetKey = "subFatKg",
+            singleLineRegex = Regex("""皮下脂肪量(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it.contains("皮下脂肪量") },
+            validRange = 1.0..60.0
+        )
+
+        // 7. 骨量占比 (%)：例如 "骨量占比 3.9%"
+        matchField(
+            targetKey = "bonePct",
+            singleLineRegex = Regex("""骨量占比(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { it.contains("骨量占比") },
+            validRange = 0.5..15.0
+        )
+
+        // 8. 骨量 (kg)：例如 "骨量 3.1kg"
+        matchField(
+            targetKey = "bone",
+            singleLineRegex = Regex("""(?<!占比)骨量(?!\s*占比)(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it == "骨量" || (it.contains("骨量") && !it.contains("占比") && !it.contains("率")) },
+            validRange = 0.5..10.0
+        )
+
+        // 9. 肌肉率 (%)：例如 "肌肉率 71.8%"
+        matchField(
+            targetKey = "musclePct",
+            singleLineRegex = Regex("""(?<!骨骼)肌肉率(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { it.contains("肌肉率") && !it.contains("骨骼") },
+            validRange = 10.0..95.0
+        )
+
+        // 10. 肌肉量 (kg)：例如 "肌肉量 56.8kg"
+        matchField(
+            targetKey = "muscle",
+            singleLineRegex = Regex("""(?<!骨骼)肌肉量(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it.contains("肌肉量") && !it.contains("骨骼") },
+            validRange = 10.0..120.0
+        )
+
+        // 11. 体水分率 (%)：例如 "体水分率 51.5%"
+        matchField(
+            targetKey = "water",
+            singleLineRegex = Regex("""体?水分率(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { it.contains("水分率") },
+            validRange = 20.0..85.0
+        )
+
+        // 12. 体水分量 (kg)：例如 "体水分量 40.7kg"
+        matchField(
+            targetKey = "waterKg",
+            singleLineRegex = Regex("""体?水分量(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it.contains("水分量") },
+            validRange = 10.0..100.0
+        )
+
+        // 13. 蛋白量占比 (%)：例如 "蛋白量占比 19.5%"
+        matchField(
+            targetKey = "protein",
+            singleLineRegex = Regex("""蛋白(?:量)?占比(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { it.contains("蛋白") && it.contains("占比") },
+            validRange = 5.0..40.0
+        )
+
+        // 14. 蛋白量含量 (kg)：例如 "蛋白量含量 15.4kg"
+        matchField(
+            targetKey = "proteinKg",
+            singleLineRegex = Regex("""蛋白(?:量)?(?:含量|量)(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it.contains("蛋白") && (it.contains("含量") || (it.contains("量") && !it.contains("占比"))) },
+            validRange = 2.0..30.0
+        )
+
+        // 15. 骨骼肌率 (%)：例如 "骨骼肌率 37.3%"
+        matchField(
+            targetKey = "skelMusclePct",
+            singleLineRegex = Regex("""骨骼肌率(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"""),
+            exactLabelPred = { it.contains("骨骼肌率") },
+            validRange = 10.0..70.0
+        )
+
+        // 16. 骨骼肌量 (kg)：例如 "骨骼肌量 29.5kg"（之前误认成体重的罪魁祸首！）
+        matchField(
+            targetKey = "skelMuscleKg",
+            singleLineRegex = Regex("""骨骼肌量(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kg)?"""),
+            exactLabelPred = { it.contains("骨骼肌量") },
+            validRange = 5.0..80.0
+        )
+
+        // 17. 基础代谢 (kcal)：例如 "基础代谢 1663.0kcal"
+        matchField(
+            targetKey = "bmr",
+            singleLineRegex = Regex("""基础代谢(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kcal)?"""),
+            exactLabelPred = { it.contains("基础代谢") },
+            validRange = 500.0..4000.0
+        )
+
+        // 18. BMI
+        matchField(
+            targetKey = "bmi",
+            singleLineRegex = Regex("""BMI(?:\s*[:：])?\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE),
+            exactLabelPred = { it.equals("BMI", ignoreCase = true) },
+            validRange = 10.0..60.0
+        )
+
+        // 核心必须有体重与体脂率才视为有效数据
         val weightKg = matches["weight"] ?: return null
         val bodyFatPct = matches["fat"] ?: return null
 
         val bmi = matches["bmi"] ?: run {
             val hM = userProfile.heightCm / 100.0
-            if (hM > 0) weightKg / (hM * hM) else 22.0
+            if (hM > 0) ((weightKg / (hM * hM)) * 10.0).roundToInt() / 10.0 else 22.0
         }
 
-        // 若部分指标由于未滑动到最底部暂时缺失，以医学经典比例兜底
         val muscleKg = matches["muscle"] ?: (weightKg * (1.0 - bodyFatPct / 100.0) * 0.75)
         val waterPct = matches["water"] ?: ((1.0 - bodyFatPct / 100.0) * 0.73 * 100.0)
         val boneMassKg = matches["bone"] ?: (weightKg * 0.045)
         val proteinPct = matches["protein"] ?: 17.0
         val visceralFat = matches["visceral"]?.toInt() ?: 4
         val bmr = matches["bmr"] ?: (10.0 * weightKg + 6.25 * userProfile.heightCm - 5.0 * 25 + 5.0)
-        val metabolicAge = matches["age"]?.toInt() ?: 25
 
         val (dateStr, timeStr) = extractDateTime(cleanTexts)
         val measuredAtEpoch = parseEpochMs(dateStr, timeStr)
@@ -210,17 +296,14 @@ object AfuUiParser {
             impedanceOhm = 0.0,
             bmi = (bmi * 10.0).roundToInt() / 10.0,
             bodyFatPct = (bodyFatPct * 10.0).roundToInt() / 10.0,
-            muscleKg = (muscleKg * 100.0).roundToInt() / 100.0,
             waterPct = (waterPct * 10.0).roundToInt() / 10.0,
+            muscleKg = (muscleKg * 10.0).roundToInt() / 10.0,
             proteinPct = (proteinPct * 10.0).roundToInt() / 10.0,
-            boneMassKg = (boneMassKg * 100.0).roundToInt() / 100.0,
+            boneMassKg = (boneMassKg * 10.0).roundToInt() / 10.0,
+            basalMetKcal = bmr,
             visceralFatRating = visceralFat,
-            basalMetKcal = bmr.roundToInt().toDouble(),
-            metabolicAge = metabolicAge,
-            syncedToGarmin = false,
-            syncedToGarminAtEpochMs = null,
-            // 完整镜像指标
-            fatMassKg = matches["fatMass"] ?: ((weightKg * bodyFatPct / 100.0 * 10.0).roundToInt() / 10.0),
+            metabolicAge = 25,
+            fatMassKg = matches["fatMass"] ?: 0.0,
             subcutaneousFatPct = matches["subFatPct"] ?: 0.0,
             subcutaneousFatKg = matches["subFatKg"] ?: 0.0,
             boneMassPct = matches["bonePct"] ?: 0.0,
@@ -243,42 +326,8 @@ object AfuUiParser {
         )
     }
 
-    private fun isWeightLabel(text: String): Boolean {
-        if (text.contains("较上次") || text.contains("目标") || text.contains("下降") || text.contains("上升")) return false
-        return text.contains("体重") || text == "重" || text.startsWith("体重 ") || text.startsWith("体重:") || text.startsWith("体重：")
-    }
-
-    /**
-     * 在关键字周围（当前节点、后 3 个节点、前 1 个节点）查找符合数值区间的数字
-     */
-    private fun findNearbyNumber(texts: List<String>, index: Int, range: ClosedFloatingPointRange<Double>): Double? {
-        // 1. 先检查当前文本内是否直接包含数字（例如 "内脏脂肪等级 11.0" 或 "体重 79.05 kg"）
-        extractNumber(texts[index], range)?.let { return it }
-
-        // 2. 检查后续相邻的 1 ~ 3 个节点
-        for (offset in 1..3) {
-            val nextIndex = index + offset
-            if (nextIndex < texts.size) {
-                extractNumber(texts[nextIndex], range)?.let { return it }
-            }
-        }
-
-        // 3. 检查前一个节点
-        if (index - 1 >= 0) {
-            extractNumber(texts[index - 1], range)?.let { return it }
-        }
-
-        return null
-    }
-
-    private fun extractNumber(text: String, range: ClosedFloatingPointRange<Double>): Double? {
-        val matcher = NUMBER_PATTERN.matcher(text)
-        while (matcher.find()) {
-            val value = matcher.group(1)?.toDoubleOrNull()
-            if (value != null && value in range) {
-                return value
-            }
-        }
-        return null
+    private fun extractPureNumber(text: String): Double? {
+        val clean = text.trim().replace("kg", "", true).replace("%", "").replace("kcal", "", true).trim()
+        return clean.toDoubleOrNull()
     }
 }
