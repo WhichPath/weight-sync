@@ -30,7 +30,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run Unit Tests (Afu parser regression)
-        run: ./gradlew testReleaseUnitTest --stacktrace
+        run: |
+          ./gradlew tasks --all --console=plain 2>&1 | grep -iE "unittest" | head -20 || true
+          ./gradlew test --stacktrace
 
       - name: Build with Gradle (Assemble Release)
         run: ./gradlew assembleRelease --stacktrace
