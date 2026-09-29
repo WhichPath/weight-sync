@@ -67,28 +67,60 @@ class AfuAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg != "com.antgroup.aijk.android") return
 
+        // 关键防护 1：在主线程即时遍历获取各窗口节点，杜绝协程异步执行时 event 被系统回收导致的空指针或异常
+        val collectedTexts = mutableListOf<String>()
+        try {
+            // 优先遍历所有交互窗口（支持 Dialog/BottomSheet 处于独立 Window 的情况）
+            val currentWindows = try { windows } catch (e: Throwable) { null }
+            if (!currentWindows.isNullOrEmpty()) {
+                for (window in currentWindows) {
+                    try {
+                        window.root?.let { traverseNodes(it, collectedTexts) }
+                    } catch (_: Throwable) {}
+                }
+            }
+            // 回退/补充当前活动窗口
+            if (collectedTexts.isEmpty()) {
+                try {
+                    rootInActiveWindow?.let { traverseNodes(it, collectedTexts) }
+                } catch (_: Throwable) {}
+            }
+            // 补充事件源节点
+            try {
+                event.source?.let { traverseNodes(it, collectedTexts) }
+            } catch (_: Throwable) {}
+        } catch (e: Throwable) {
+            AppLogger.w(TAG, "提取节点文本失败: ${e.message}")
+        }
+
+        if (collectedTexts.isEmpty()) return
+
+        val currentTexts = collectedTexts.toList()
+
         serviceScope.launch(Dispatchers.Default) {
-            val rootNode = try {
-                rootInActiveWindow ?: event.source
-            } catch (e: Throwable) {
-                null
-            } ?: return@launch
-
-            val currentTexts = mutableListOf<String>()
-            traverseNodes(rootNode, currentTexts)
-
-            if (currentTexts.isEmpty()) return@launch
-
             // 严格过滤：只有当用户在阿福中展示“身体指标记录”详情面板时才介入收集！
             val isDetailDialog = currentTexts.any { it.contains("身体指标记录") } ||
                     (currentTexts.any { it.contains("内脏脂肪") } && currentTexts.any { it.contains("体脂率") })
 
+            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
             if (!isDetailDialog) {
                 if (isInsideDialog) {
-                    // 用户退出了详情面板，清空累加池
                     isInsideDialog = false
-                    dialogAccumulatedTexts.clear()
-                    lastMatchedFieldsCount = 0
+                    // 注意：退出弹窗时若未匹配成功才清空，避免刚截获完成就被瞬间抹去
+                    if (lastMatchedFieldsCount == 0) {
+                        dialogAccumulatedTexts.clear()
+                    }
+                }
+                // 关键防护 2：即使未进入弹窗，也更新排查日志状态，避免用户看到“暂无排查数据”产生断连误解
+                if (!isInsideDialog && dialogAccumulatedTexts.isEmpty()) {
+                    val preview = currentTexts.take(8).joinToString(", ")
+                    _lastRawInspectionLog.value = "【更新时间】$timeStr\n" +
+                            "【监听状态】已接收到阿福页面事件（包名: $pkg）\n" +
+                            "【当前页面】非详情面板（未检测到“身体指标记录”或“内脏脂肪”详情字段）\n" +
+                            "【当前节点数】${currentTexts.size} 条\n" +
+                            "【前台预览】$preview\n" +
+                            "【操作提示】请在阿福点击【测量详情】查看身体指标弹窗"
                 }
                 return@launch
             }
@@ -106,7 +138,6 @@ class AfuAccessibilityService : AccessibilityService() {
             isInsideDialog = true
             dialogAccumulatedTexts.addAll(pureDialogTexts)
 
-            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             val rawTextsList = dialogAccumulatedTexts.toList()
 
             AppLogger.d(TAG, "[$timeStr] 处于阿福详情面板，已累加可见文本 ${rawTextsList.size} 条")

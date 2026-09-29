@@ -87,6 +87,57 @@ class AfuUiParserTest {
     }
 
     @Test
+    fun testUserScreenRecordingVideo2232() {
+        // 用户 2.0.6 录屏场景（22:32 测量）：弹窗内包含当前 80.05kg / 24.5% 及底部历史旧数据
+        val videoScrapedTexts = listOf(
+            "身体指标记录 X",
+            "共 3 条记录, 更新于 22:32",
+            "体重 80.05 kg 22:32 一",
+            "内脏脂肪等级 11.0",
+            "体脂率 24.5%",
+            "脂肪量 19.6kg",
+            "皮下脂肪率 17.5%",
+            "皮下脂肪量 14.0kg",
+            "骨量占比 4.0%",
+            "骨量 3.2kg",
+            "肌肉率 71.5%",
+            "肌肉量 57.2kg",
+            "体水分率 51.5%",
+            "体水分量 41.2kg",
+            "蛋白量占比 19.3%",
+            "蛋白量含量 15.4kg",
+            "骨骼肌率 37.2%",
+            "骨骼肌量 29.8kg",
+            "基础代谢 1675.0kcal",
+            "体重 80.20 kg 21:39",
+            "体重 78.60 kg 08:03"
+        )
+
+        val result = AfuUiParser.parseScreenTexts(videoScrapedTexts, UserProfile(heightCm = 174.0))
+        assertNotNull("录屏数据解析必须成功", result)
+        val m = result!!.measurement
+
+        assertEquals("体重必须准确解析为当前测量的 80.05kg，不能误取历史 80.20 或 78.60", 80.05, m.weightKg, 0.01)
+        assertEquals("体脂率必须准确解析为 24.5%", 24.5, m.bodyFatPct, 0.01)
+        assertEquals("内脏脂肪等级必须为 11", 11, m.visceralFatRating)
+        assertEquals("脂肪量必须为 19.6kg", 19.6, m.fatMassKg, 0.01)
+        assertEquals("皮下脂肪率必须为 17.5%", 17.5, m.subcutaneousFatPct, 0.01)
+        assertEquals("皮下脂肪量必须为 14.0kg", 14.0, m.subcutaneousFatKg, 0.01)
+        assertEquals("骨量占比必须为 4.0%", 4.0, m.boneMassPct, 0.01)
+        assertEquals("骨量必须为 3.2kg", 3.2, m.boneMassKg, 0.01)
+        assertEquals("肌肉率必须为 71.5%", 71.5, m.musclePct, 0.01)
+        assertEquals("肌肉量必须为 57.2kg", 57.2, m.muscleKg, 0.01)
+        assertEquals("体水分率必须为 51.5%", 51.5, m.waterPct, 0.01)
+        assertEquals("体水分量必须为 41.2kg", 41.2, m.waterKg, 0.01)
+        assertEquals("蛋白量占比必须为 19.3%", 19.3, m.proteinPct, 0.01)
+        assertEquals("蛋白量含量必须为 15.4kg", 15.4, m.proteinKg, 0.01)
+        assertEquals("骨骼肌率必须为 37.2%", 37.2, m.skeletalMusclePct, 0.01)
+        assertEquals("骨骼肌量必须为 29.8kg", 29.8, m.skeletalMuscleKg, 0.01)
+        assertEquals("基础代谢必须为 1675.0", 1675.0, m.basalMetKcal, 0.01)
+        assertEquals("时间必须解析为 22:32", "22:32", result.timeStr)
+    }
+
+    @Test
     fun testIgnoreHomeScreenNoise() {
         val homeTexts = listOf(
             "身材管理",

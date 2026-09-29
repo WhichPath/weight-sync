@@ -84,7 +84,11 @@ object AfuUiParser {
      * 只截取从【身体指标记录】或【共X条记录，更新于】开始到【确认】之间的纯弹窗节点切片！
      */
     fun parseScreenTexts(texts: List<String>, userProfile: UserProfile): ParseResult? {
-        val cleanTexts = texts.map { it.trim() }.filter { it.isNotEmpty() }
+        val cleanTexts = texts.map {
+            it.replace('\u00A0', ' ')
+                .replace('\u3000', ' ')
+                .trim()
+        }.filter { it.isNotEmpty() }
         if (cleanTexts.isEmpty()) return null
 
         // 1. 定位弹窗起始点
@@ -96,7 +100,7 @@ object AfuUiParser {
         val startIndex = if (dialogStartIndex != -1) {
             dialogStartIndex
         } else {
-            val fallbackIdx = cleanTexts.indexOfFirst { it.contains("内脏脂肪") || it.startsWith("体重 ") }
+            val fallbackIdx = cleanTexts.indexOfFirst { it.contains("内脏脂肪") || it.contains("体重") }
             if (fallbackIdx != -1 && cleanTexts.any { it.contains("基础代谢") }) fallbackIdx else -1
         }
 
@@ -108,31 +112,54 @@ object AfuUiParser {
         val matches = mutableMapOf<String, Double>()
 
         // ── 2. 提取体重 (重点：只在弹窗内寻找！) ──
-        // 结构例如：
-        // 形式1：[体重 80.20 kg] 单个节点合并
-        // 形式2：[体重 80.20kg]
-        // 形式3：[体重, 80.20, kg] 或 [体重, 80.20kg]
         for (i in dialogTexts.indices) {
             val t = dialogTexts[i]
-            if (t.startsWith("体重 ") || t.startsWith("体重:") || t.startsWith("体重：")) {
-                Regex("""[0-9]+(?:\.[0-9]+)?""").find(t)?.value?.toDoubleOrNull()?.let {
-                    if (it in 30.0..250.0) matches["weight"] = it
-                }
-            } else if (t == "体重") {
-                // 检查后 1 到 2 个节点
+            if (t.contains("体重")) {
                 findFirstNumber(dialogTexts, i, 30.0..250.0)?.let { matches["weight"] = it }
             }
             if (matches["weight"] != null) break
         }
 
         // ── 3. 提取体脂率 (重点：只在弹窗内寻找！) ──
-        // 结构例如：[体脂率 24.9%] 或 [体脂率, 24.9%]
         for (i in dialogTexts.indices) {
             val t = dialogTexts[i]
             if (t.contains("体脂率") && !t.contains("皮下")) {
                 findFirstNumber(dialogTexts, i, 3.0..65.0)?.let { matches["fat"] = it }
             }
             if (matches["fat"] != null) break
+        }
+
+        // 容错回退：若弹窗内未直接包含体重/体脂率（部分机型或历史折叠视图），从弹窗更新时间或主页卡片回溯
+        if (matches["weight"] == null || matches["fat"] == null) {
+            val timeRegex = Regex("""(?:更新于|于)?\s*([0-2]?[0-9]:[0-5][0-9])""")
+            var targetTime: String? = null
+            for (t in dialogTexts) {
+                val m = timeRegex.find(t)
+                if (m != null) {
+                    targetTime = m.groupValues[1]
+                    break
+                }
+            }
+
+            if (targetTime != null) {
+                val timeIdx = (startIndex - 1 downTo 0).firstOrNull { cleanTexts[it].contains(targetTime) } ?: -1
+                if (timeIdx != -1) {
+                    for (offset in -6..6) {
+                        val idx = timeIdx + offset
+                        if (idx in 0 until startIndex) {
+                            val candidate = cleanTexts[idx]
+                            val num = Regex("""[0-9]+(?:\.[0-9]+)?""").find(candidate)?.value?.toDoubleOrNull()
+                            if (num != null) {
+                                if (matches["weight"] == null && num in 35.0..250.0 && !candidate.contains("%")) {
+                                    matches["weight"] = num
+                                } else if (matches["fat"] == null && (num in 5.0..55.0 || candidate.contains("%")) && num in 5.0..65.0) {
+                                    matches["fat"] = num
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ── 4. 提取各细分成分指标（单行带标签 或 标签+数值相连）──
@@ -363,6 +390,9 @@ object AfuUiParser {
         for (offset in 1..3) {
             if (labelIndex + offset < texts.size) {
                 val nextText = texts[labelIndex + offset]
+                Regex("""[0-9]+(?:\.[0-9]+)?""").find(nextText)?.value?.toDoubleOrNull()?.let {
+                    if (it in validRange) return it
+                }
                 val num = extractPureNumber(nextText)
                 if (num != null && num in validRange) {
                     return num
