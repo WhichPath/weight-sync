@@ -10,18 +10,39 @@ import com.example.dianzicheng.data.local.PreferenceManager
 import com.example.dianzicheng.data.repository.ScaleRepository
 import com.example.dianzicheng.domain.BodyMeasurement
 import com.example.dianzicheng.domain.UserProfile
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 
 private const val TAG = "AfuAccessibilityService"
+private const val AFU_PACKAGE = "com.antgroup.aijk.android"
 
+/** 详情弹窗关闭判定：静默超过该时长即认为弹窗已关闭（避免 Toast 等零散窗口误判） */
+private const val SHEET_TIMEOUT_MS = 8_000L
+
+/**
+ * 阿福 App（蚂蚁阿福）无障碍抓取服务。
+ *
+ * v2.0.8 架构：
+ *  1. **按窗口隔离快照**：每来一次事件，先按窗口分别抓取节点文本，只取包含
+ *     “共 N 条记录，更新于 HH:mm”的那个窗口（即“身体指标记录”弹窗），彻底屏蔽主页卡片；
+ *  2. **会话化累加**：一次弹窗 = 一个会话（以弹窗表头文本为 key），会话内把各次滚动的快照
+ *     按「指标 → 数值」合并，滚动结束后自然收敛到完整 17 项；
+ *  3. **不再用 Set 去重**：早期版本用 LinkedHashSet 累加，导致弹窗里与主页重名的标签/数值
+ *     被静默吞掉（这正是 2.0.7 拿到 80.2kg / 22.0% 的直接原因），现在改为解析器内部按标签配对；
+ *  4. **只认最新一次称重**：由弹窗表头的“更新于 HH:mm”锁定目标记录，越滚动越不会串历史数据。
+ */
 class AfuAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -30,11 +51,15 @@ class AfuAccessibilityService : AccessibilityService() {
     private lateinit var scaleRepository: ScaleRepository
     private lateinit var preferenceManager: PreferenceManager
 
-    // 缓存“身体指标记录”弹窗内的节点文本
-    private val dialogAccumulatedTexts = LinkedHashSet<String>()
-    private var lastProcessedFingerprint: String? = null
-    private var lastMatchedFieldsCount = 0
-    private var isInsideDialog = false
+    // ── 会话状态（一次弹窗打开 = 一个会话） ──
+    private var sessionKey: String? = null
+    private val sessionMetrics = LinkedHashMap<String, Double>()
+    private var sessionWeight: Double? = null
+    private var sessionEpochMs: Long? = null
+    private var lastSeenSheetAt = 0L
+    private var lastPublishedFields = 0
+    private var lastPublishedFingerprint: String? = null
+    private var toastShown = false
 
     companion object {
         private val _isServiceActive = MutableStateFlow(false)
@@ -46,8 +71,10 @@ class AfuAccessibilityService : AccessibilityService() {
         private val _lastScrapeLog = MutableStateFlow<String>("等待进入阿福【测量详情】面板...")
         val lastScrapeLog: StateFlow<String> = _lastScrapeLog.asStateFlow()
 
-        // 供 UI 排查面板实时查看的原始文本与解析细节
-        private val _lastRawInspectionLog = MutableStateFlow<String>("暂无捕获排查数据。在阿福打开测量详情后在此处查看抓取到的原始文本。")
+        /** 供 UI 排查面板实时查看的原始文本与解析细节 */
+        private val _lastRawInspectionLog = MutableStateFlow<String>(
+            "暂无捕获排查数据。在阿福打开测量详情后在此处查看抓取到的原始文本。"
+        )
         val lastRawInspectionLog: StateFlow<String> = _lastRawInspectionLog.asStateFlow()
     }
 
@@ -58,149 +85,296 @@ class AfuAccessibilityService : AccessibilityService() {
         scaleRepository = ScaleRepository(database.scaleDao())
         preferenceManager = PreferenceManager(applicationContext)
 
-        AppLogger.i(TAG, "阿福无障碍服务已启动连接（被动详情监听模式）")
+        AppLogger.i(TAG, "阿福无障碍服务已启动连接（按窗口隔离 + 会话化累加模式）")
         _lastScrapeLog.value = "无障碍服务已激活，请在阿福点击【测量详情】"
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        val pkg = event.packageName?.toString() ?: return
-        if (pkg != "com.antgroup.aijk.android") return
+        val pkg = event?.packageName?.toString() ?: return
+        if (pkg != AFU_PACKAGE) return
 
-        // 关键防护 1：在主线程即时遍历获取各窗口节点，杜绝协程异步执行时 event 被系统回收导致的空指针或异常
-        val collectedTexts = mutableListOf<String>()
+        // 主线程即时遍历各窗口节点，避免协程异步执行时 event 被系统回收
+        val snapshots = collectWindowTexts()
+        val sheetTexts = selectSheetSnapshot(snapshots)
+        val stamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+        if (sheetTexts == null) {
+            handleNoSheet(stamp, pkg, snapshots)
+            return
+        }
+        lastSeenSheetAt = System.currentTimeMillis()
+        handleSheet(sheetTexts, stamp)
+    }
+
+    // ────────────────────────── 弹窗处理 ──────────────────────────
+
+    private fun handleSheet(sheetTexts: List<String>, stamp: String) {
+        serviceScope.launch {
+            val snapshot = AfuUiParser.parseSheet(sheetTexts)
+            if (snapshot == null) {
+                publishLog(stamp, sheetTexts, null, "未识别到时序正确的弹窗内容")
+                return@launch
+            }
+
+            val key = snapshot.sheetKey.ifBlank { "sheet@${snapshot.timeStr}" }
+            if (key != sessionKey) startSession(key)
+
+            // ① 记录体重锚点（只认“最新一次称重”那块记录）
+            if (snapshot.anchored && snapshot.weightKg != null) {
+                val weight = snapshot.weightKg
+                val previousWeight = sessionWeight
+                if (previousWeight != null && abs(previousWeight - weight) > 0.05) {
+                    // 弹窗表头没变却读到另一个体重 → 用户展开了别的记录，重建会话
+                    startSession(key)
+                }
+                sessionWeight = weight
+                sessionEpochMs = snapshot.measuredAtEpochMs
+            }
+
+            // ② 合并指标
+            if (snapshot.metrics.isNotEmpty()) {
+                if (snapshot.anchored) {
+                    sessionMetrics.putAll(snapshot.metrics)
+                } else {
+                    // 表头已滚出屏幕：用“体重 ↔ 率/量”的物理关系校验，避免混入历史记录
+                    val candidate = LinkedHashMap(sessionMetrics).apply { putAll(snapshot.metrics) }
+                    if (isPhysicallyConsistent(candidate, sessionWeight)) {
+                        sessionMetrics.putAll(snapshot.metrics)
+                    }
+                }
+            }
+
+            val weight = sessionWeight
+            val epoch = sessionEpochMs
+            if (weight == null || epoch == null) {
+                publishLog(stamp, sheetTexts, snapshot, "已识别弹窗，但目标记录的体重表头尚未进入视图")
+                return@launch
+            }
+
+            val fat = sessionMetrics[AfuUiParser.Metric.BODY_FAT.key]
+            val totalFields = sessionMetrics.size + 1
+            if (fat == null || sessionMetrics.size < 5) {
+                publishLog(stamp, sheetTexts, snapshot, "等待更多指标（已捕获 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT}）")
+                return@launch
+            }
+
+            val fingerprint = "$key|$weight|$fat"
+            if (fingerprint == lastPublishedFingerprint && totalFields <= lastPublishedFields) {
+                publishLog(stamp, sheetTexts, snapshot, "数据无变化")
+                return@launch
+            }
+
+            val profile = preferenceManager.userProfile.first() ?: UserProfile()
+            val measurement = AfuUiParser.buildMeasurement(weight, epoch, sessionMetrics, profile)
+
+            // 同一分钟内、体重一致 => 认为是同一条记录，用同一主键覆盖更新，避免滚动过程产生多条记录
+            val existing = scaleRepository.getAllMeasurements().firstOrNull {
+                abs(it.measuredAtEpochMs - epoch) < 120_000L && abs(it.weightKg - weight) < 0.05
+            }
+            if (existing != null && totalFields < countCapturedFields(existing)) {
+                publishLog(stamp, sheetTexts, snapshot, "库中已有更完整记录，跳过覆盖")
+                return@launch
+            }
+
+            val toSave = if (existing != null) measurement.copy(id = existing.id) else measurement
+            val saved = scaleRepository.saveMeasurement(toSave)
+            if (saved == null) {
+                publishLog(stamp, sheetTexts, snapshot, "数据无效（体重 < 10kg），已忽略")
+                return@launch
+            }
+
+            lastPublishedFingerprint = fingerprint
+            lastPublishedFields = totalFields
+            _lastCapturedMeasurement.value = saved
+            _lastScrapeLog.value = "已从详情面板截获: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}% " +
+                    "(共 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项，待确认上传)"
+            publishLog(stamp, sheetTexts, snapshot, null)
+
+            if (!toastShown) {
+                toastShown = true
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        applicationContext,
+                        "已截获详情: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}%（$totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项）",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun startSession(key: String) {
+        if (sessionKey != null && sessionKey != key) {
+            AppLogger.i(TAG, "切换弹窗会话: $sessionKey -> $key")
+        }
+        sessionKey = key
+        sessionMetrics.clear()
+        sessionWeight = null
+        sessionEpochMs = null
+        lastPublishedFields = 0
+        lastPublishedFingerprint = null
+        toastShown = false
+    }
+
+    private fun handleNoSheet(stamp: String, pkg: String, snapshots: List<List<String>>) {
+        val silentFor = System.currentTimeMillis() - lastSeenSheetAt
+        if (sessionKey != null && silentFor > SHEET_TIMEOUT_MS) {
+            AppLogger.i(TAG, "详情弹窗已关闭，会话结束（本次已捕获 ${sessionMetrics.size}/${AfuUiParser.Metric.entries.size} 项）")
+            sessionKey = null
+            sessionMetrics.clear()
+            sessionWeight = null
+            sessionEpochMs = null
+            lastPublishedFields = 0
+            lastPublishedFingerprint = null
+            toastShown = false
+        }
+        if (sessionKey == null) {
+            val preview = snapshots.flatten().take(10).joinToString(", ")
+            _lastRawInspectionLog.value = "【更新时间】$stamp\n" +
+                    "【监听状态】已接收到阿福页面事件（包名: $pkg）\n" +
+                    "【当前页面】未检测到【身体指标记录】详情弹窗\n" +
+                    "【当前节点数】${snapshots.sumOf { it.size }} 条\n" +
+                    "【前台预览】$preview\n" +
+                    "【操作提示】请在阿福点击【测量详情】展开身体指标弹窗"
+        }
+    }
+
+    /**
+     * 指标“体重 ↔ 率/量”必须自洽：脂肪量 ≈ 体重 × 体脂率，水分量 ≈ 体重 × 水分率 ……
+     * 用于在“表头滚出屏幕”时判断这批数值是否真的属于同一次称重。
+     */
+    private fun isPhysicallyConsistent(metrics: Map<String, Double>, weightKg: Double?): Boolean {
+        if (weightKg == null || weightKg <= 0.0) return true
+        val pairs = listOf(
+            AfuUiParser.Metric.FAT_MASS.key to AfuUiParser.Metric.BODY_FAT.key,
+            AfuUiParser.Metric.SUB_FAT_KG.key to AfuUiParser.Metric.SUB_FAT_PCT.key,
+            AfuUiParser.Metric.BONE_KG.key to AfuUiParser.Metric.BONE_PCT.key,
+            AfuUiParser.Metric.MUSCLE_KG.key to AfuUiParser.Metric.MUSCLE_PCT.key,
+            AfuUiParser.Metric.WATER_KG.key to AfuUiParser.Metric.WATER_PCT.key,
+            AfuUiParser.Metric.PROTEIN_KG.key to AfuUiParser.Metric.PROTEIN_PCT.key,
+            AfuUiParser.Metric.SKELETAL_KG.key to AfuUiParser.Metric.SKELETAL_PCT.key
+        )
+        for ((kgKey, pctKey) in pairs) {
+            val kg = metrics[kgKey] ?: continue
+            val pct = metrics[pctKey] ?: continue
+            val expected = weightKg * pct / 100.0
+            val tolerance = maxOf(0.8, expected * 0.08)
+            if (abs(kg - expected) > tolerance) return false
+        }
+        return true
+    }
+
+    /** 统计一条记录里已捕获的项数（含体重），用于避免“滚动不足的新会话”覆盖更完整的旧记录 */
+    private fun countCapturedFields(m: BodyMeasurement): Int {
+        var count = 1 // 体重
+        val values = listOf(
+            m.bodyFatPct, m.muscleKg, m.waterPct, m.proteinPct, m.boneMassKg,
+            m.fatMassKg, m.subcutaneousFatPct, m.subcutaneousFatKg, m.boneMassPct,
+            m.musclePct, m.waterKg, m.proteinKg, m.skeletalMusclePct, m.skeletalMuscleKg
+        )
+        for (v in values) if (v > 0.0) count++
+        if (m.visceralFatRating > 1) count++
+        if (m.basalMetKcal > 0.0) count++
+        return count
+    }
+
+    // ────────────────────────── 排查日志 ──────────────────────────
+
+    private fun publishLog(
+        stamp: String,
+        sheetTexts: List<String>,
+        snapshot: AfuUiParser.SheetSnapshot?,
+        note: String?
+    ) {
+        val builder = StringBuilder()
+        builder.append("【更新时间】$stamp\n")
+        builder.append("【解析架构】按窗口隔离 + 记录分块（锁定最新一次称重）\n")
+        if (snapshot != null) {
+            builder.append("【弹窗锚点】${snapshot.sheetKey.ifBlank { "（未匹配到“共N条记录”）" }}\n")
+            builder.append("【最新记录时间】${snapshot.sheetTimeStr ?: "未知"}\n")
+            builder.append("【目标记录体重】${snapshot.weightKg?.let { "${it}kg" } ?: "表头未进入视图（沿用会话锚点）"}\n")
+        }
+        builder.append(
+            "【会话累计】${sessionMetrics.size}/${AfuUiParser.Metric.entries.size} 项成分" +
+                    "（含体重共 ${sessionMetrics.size + 1}/${AfuUiParser.TOTAL_FIELD_COUNT} 项）\n"
+        )
+        builder.append("【体重锚点】${sessionWeight?.let { "${it}kg" } ?: "未锚定"}\n")
+        if (note != null) builder.append("【状态】$note\n")
+
+        if (sessionMetrics.isNotEmpty()) {
+            val detail = AfuUiParser.Metric.entries
+                .filter { sessionMetrics.containsKey(it.key) }
+                .joinToString(", ") { "${it.labels[0]}=${sessionMetrics[it.key]}" }
+            builder.append("【指标明细】$detail\n")
+        }
+        val fat = sessionMetrics[AfuUiParser.Metric.BODY_FAT.key]
+        if (sessionWeight != null && fat != null) {
+            builder.append(
+                "【核心数据】体重=${sessionWeight}kg, 体脂=${fat}%, " +
+                        "肌肉=${sessionMetrics[AfuUiParser.Metric.MUSCLE_KG.key] ?: 0.0}kg\n"
+            )
+        }
+        builder.append("【弹窗窗口全部原始文本（按视图顺序）】:\n")
+        sheetTexts.forEachIndexed { index, text -> builder.append("  [$index] $text\n") }
+        _lastRawInspectionLog.value = builder.toString()
+
+        val anchorFlag = if (snapshot?.anchored == true) "已锚定目标记录" else "未锚定（滚动中）"
+        AppLogger.d(
+            TAG,
+            "弹窗快照解析：累计 ${sessionMetrics.size}/${AfuUiParser.Metric.entries.size} 项，$anchorFlag" +
+                    (note?.let { " - $it" } ?: "")
+        )
+    }
+
+    // ────────────────────────── 窗口抓取 ──────────────────────────
+
+    private fun collectWindowTexts(): List<List<String>> {
+        val snapshots = ArrayList<List<String>>()
         try {
-            // 优先遍历所有交互窗口（支持 Dialog/BottomSheet 处于独立 Window 的情况）
-            val currentWindows = try { windows } catch (e: Throwable) { null }
+            val currentWindows = windows
             if (!currentWindows.isNullOrEmpty()) {
                 for (window in currentWindows) {
                     try {
-                        window.root?.let { traverseNodes(it, collectedTexts) }
-                    } catch (_: Throwable) {}
-                }
-            }
-            // 回退/补充当前活动窗口
-            if (collectedTexts.isEmpty()) {
-                try {
-                    rootInActiveWindow?.let { traverseNodes(it, collectedTexts) }
-                } catch (_: Throwable) {}
-            }
-            // 补充事件源节点
-            try {
-                event.source?.let { traverseNodes(it, collectedTexts) }
-            } catch (_: Throwable) {}
-        } catch (e: Throwable) {
-            AppLogger.w(TAG, "提取节点文本失败: ${e.message}")
-        }
-
-        if (collectedTexts.isEmpty()) return
-
-        val currentTexts = collectedTexts.toList()
-
-        serviceScope.launch(Dispatchers.Default) {
-            // 严格过滤：只有当用户在阿福中展示“身体指标记录”详情面板时才介入收集！
-            val isDetailDialog = currentTexts.any { it.contains("身体指标记录") } ||
-                    (currentTexts.any { it.contains("内脏脂肪") } && currentTexts.any { it.contains("体脂率") })
-
-            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-
-            if (!isDetailDialog) {
-                if (isInsideDialog) {
-                    isInsideDialog = false
-                    // 注意：退出弹窗时若未匹配成功才清空，避免刚截获完成就被瞬间抹去
-                    if (lastMatchedFieldsCount == 0) {
-                        dialogAccumulatedTexts.clear()
+                        val root = window.root ?: continue
+                        val texts = ArrayList<String>()
+                        traverseNodes(root, texts)
+                        if (texts.isNotEmpty()) snapshots.add(texts)
+                    } catch (_: Throwable) {
+                        // 忽略跨进程窗口异常
                     }
                 }
-                // 关键防护 2：即使未进入弹窗，也更新排查日志状态，避免用户看到“暂无排查数据”产生断连误解
-                if (!isInsideDialog && dialogAccumulatedTexts.isEmpty()) {
-                    val preview = currentTexts.take(8).joinToString(", ")
-                    _lastRawInspectionLog.value = "【更新时间】$timeStr\n" +
-                            "【监听状态】已接收到阿福页面事件（包名: $pkg）\n" +
-                            "【当前页面】非详情面板（未检测到“身体指标记录”或“内脏脂肪”详情字段）\n" +
-                            "【当前节点数】${currentTexts.size} 条\n" +
-                            "【前台预览】$preview\n" +
-                            "【操作提示】请在阿福点击【测量详情】查看身体指标弹窗"
+            }
+        } catch (_: Throwable) {
+            // 忽略 windows 获取失败
+        }
+        if (snapshots.isEmpty()) {
+            try {
+                val root = rootInActiveWindow
+                if (root != null) {
+                    val texts = ArrayList<String>()
+                    traverseNodes(root, texts)
+                    if (texts.isNotEmpty()) snapshots.add(texts)
                 }
-                return@launch
-            }
-
-            // 用户处于详情面板：只截取弹窗部分的节点进行累加，坚决屏蔽弹窗背后的主页节点
-            val dialogCutoffIdx = currentTexts.indexOfFirst {
-                it.contains("身体指标记录") || (it.contains("共") && it.contains("条记录") && it.contains("更新于"))
-            }
-            val pureDialogTexts = if (dialogCutoffIdx != -1) {
-                currentTexts.subList(dialogCutoffIdx, currentTexts.size)
-            } else {
-                currentTexts
-            }
-
-            isInsideDialog = true
-            dialogAccumulatedTexts.addAll(pureDialogTexts)
-
-            val rawTextsList = dialogAccumulatedTexts.toList()
-
-            AppLogger.d(TAG, "[$timeStr] 处于阿福详情面板，已累加可见文本 ${rawTextsList.size} 条")
-
-            val profile = preferenceManager.userProfile.first() ?: UserProfile()
-            val parseResult = AfuUiParser.parseScreenTexts(rawTextsList, profile)
-
-            // 更新实时排查日志，方便在 UI 上随时查看
-            val inspectionBuilder = StringBuilder()
-            inspectionBuilder.append("【更新时间】$timeStr\n")
-            inspectionBuilder.append("【累加节点数】${rawTextsList.size} 条\n")
-            if (parseResult != null) {
-                inspectionBuilder.append("【解析状态】成功 (匹配 ${parseResult.matchedFieldsCount} 项)\n")
-                inspectionBuilder.append("【核心数据】体重=${parseResult.measurement.weightKg}kg, 体脂=${parseResult.measurement.bodyFatPct}%, 肌肉=${parseResult.measurement.muscleKg}kg\n")
-                inspectionBuilder.append("【匹配详情】${parseResult.rawMatches}\n")
-            } else {
-                inspectionBuilder.append("【解析状态】等待核心字段（体重/体脂），尚未满足或未滑动到位\n")
-            }
-            inspectionBuilder.append("【抓取到的全部原始文本】:\n")
-            rawTextsList.forEachIndexed { idx, txt ->
-                inspectionBuilder.append("  [$idx] $txt\n")
-            }
-            _lastRawInspectionLog.value = inspectionBuilder.toString()
-
-            if (parseResult == null) {
-                return@launch
-            }
-
-            // 若本次提取到的有效项数没有超过已保存的项数，且指纹相同，则不需要重复写入
-            if (parseResult.fingerprint == lastProcessedFingerprint && parseResult.matchedFieldsCount <= lastMatchedFieldsCount) {
-                return@launch
-            }
-
-            val measurement = parseResult.measurement
-
-            // 检查数据库中是否已存在该条记录（以防重复保存历史旧弹窗）
-            val existingRecords = scaleRepository.getAllMeasurements()
-            val isDuplicateInDb = existingRecords.any {
-                abs(it.measuredAtEpochMs - measurement.measuredAtEpochMs) < 120_000L &&
-                        abs(it.weightKg - measurement.weightKg) < 0.05
-            }
-
-            if (isDuplicateInDb && parseResult.matchedFieldsCount <= lastMatchedFieldsCount) {
-                return@launch
-            }
-
-            lastProcessedFingerprint = parseResult.fingerprint
-            lastMatchedFieldsCount = parseResult.matchedFieldsCount
-
-            AppLogger.i(TAG, "详情面板提取成功: 体重 ${measurement.weightKg}kg / 体脂 ${measurement.bodyFatPct}% / 骨骼肌 ${measurement.skeletalMuscleKg}kg (${parseResult.matchedFieldsCount}项)")
-
-            val savedRecord = scaleRepository.saveMeasurement(measurement) ?: return@launch
-            _lastCapturedMeasurement.value = savedRecord
-            _lastScrapeLog.value = "已从详情面板截获: ${savedRecord.weightKg}kg / 体脂 ${savedRecord.bodyFatPct}% (共${parseResult.matchedFieldsCount}项，待确认上传)"
-
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    applicationContext,
-                    "已截获详情: ${savedRecord.weightKg}kg / 体脂 ${savedRecord.bodyFatPct}%，请在 App 中确认上传",
-                    Toast.LENGTH_LONG
-                ).show()
+            } catch (_: Throwable) {
+                // 忽略根窗口异常
             }
         }
+        return snapshots
+    }
+
+    /** 只挑出“身体指标记录”弹窗那个窗口（优先认弹窗独有表头，其次降级判断） */
+    private fun selectSheetSnapshot(snapshots: List<List<String>>): List<String>? {
+        for (texts in snapshots) {
+            val index = texts.indexOfFirst { AfuUiParser.isSheetHeader(it) }
+            if (index >= 0) return texts.subList(index, texts.size).toList()
+        }
+        for (texts in snapshots) {
+            if (AfuUiParser.looksLikeSheet(texts)) {
+                val index = texts.indexOfFirst { it.contains("体重") }
+                return if (index > 0) texts.subList(index, texts.size).toList() else texts
+            }
+        }
+        return null
     }
 
     private fun traverseNodes(node: AccessibilityNodeInfo?, outList: MutableList<String>) {

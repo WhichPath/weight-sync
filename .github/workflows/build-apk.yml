@@ -29,6 +29,9 @@ jobs:
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew
 
+      - name: Run Unit Tests (Afu parser regression)
+        run: ./gradlew testReleaseUnitTest --stacktrace
+
       - name: Build with Gradle (Assemble Release)
         run: ./gradlew assembleRelease --stacktrace
 

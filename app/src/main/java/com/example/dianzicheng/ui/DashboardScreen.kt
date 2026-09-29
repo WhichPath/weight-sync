@@ -27,10 +27,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.dianzicheng.BuildConfig
 import com.example.dianzicheng.domain.BodyMeasurement
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,7 +55,7 @@ fun DashboardScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("阿福数据同步", fontWeight = FontWeight.Bold)
                         Text(
-                            "v2.0.7 纯原生无障碍抓取",
+                            "v${BuildConfig.VERSION_NAME} 纯原生无障碍抓取",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -470,27 +472,32 @@ private fun CapturedMeasurementCard(
 
             Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-            // 多项身体指标网格（镜像阿福 17 项全量数据）
+            // 阿福弹窗 17 项全量指标（含体重），与实际称重一一对应
+            val metricCells = listOf(
+                "BMI" to trimNum(measurement.bmi),
+                "内脏脂肪" to "${measurement.visceralFatRating} 级",
+                "脂肪量" to kgText(measurement.fatMassKg),
+                "皮下脂肪率" to pctText(measurement.subcutaneousFatPct),
+                "皮下脂肪量" to kgText(measurement.subcutaneousFatKg),
+                "骨量占比" to pctText(measurement.boneMassPct),
+                "骨量" to kgText(measurement.boneMassKg),
+                "肌肉率" to pctText(measurement.musclePct),
+                "肌肉量" to kgText(measurement.muscleKg),
+                "体水分率" to pctText(measurement.waterPct),
+                "体水分量" to kgText(measurement.waterKg),
+                "蛋白量占比" to pctText(measurement.proteinPct),
+                "蛋白量含量" to kgText(measurement.proteinKg),
+                "骨骼肌率" to pctText(measurement.skeletalMusclePct),
+                "骨骼肌量" to kgText(measurement.skeletalMuscleKg),
+                "基础代谢" to if (measurement.basalMetKcal > 0) "${trimNum(measurement.basalMetKcal)} kcal" else "--"
+            )
+
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MetricItem("BMI", "${measurement.bmi}")
-                    MetricItem("肌肉量", "${measurement.muscleKg} kg")
-                    MetricItem("骨量", "${measurement.boneMassKg} kg")
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MetricItem("体水分率", "${measurement.waterPct}%")
-                    MetricItem("蛋白占比", "${measurement.proteinPct}%")
-                    MetricItem("内脏脂肪", "${measurement.visceralFatRating} 级")
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MetricItem("基础代谢", "${measurement.basalMetKcal.toInt()} kcal")
-                    MetricItem("脂肪量", if (measurement.fatMassKg > 0) "${measurement.fatMassKg} kg" else "--")
-                    MetricItem("骨骼肌量", if (measurement.skeletalMuscleKg > 0) "${measurement.skeletalMuscleKg} kg" else "--")
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MetricItem("肌肉率", if (measurement.musclePct > 0) "${measurement.musclePct}%" else "--")
-                    MetricItem("皮下脂肪率", if (measurement.subcutaneousFatPct > 0) "${measurement.subcutaneousFatPct}%" else "--")
-                    MetricItem("骨量占比", if (measurement.boneMassPct > 0) "${measurement.boneMassPct}%" else "--")
+                metricCells.chunked(3).forEach { row ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        row.forEach { (label, value) -> MetricItem(label, value) }
+                        repeat(3 - row.size) { MetricItem("", "") }
+                    }
                 }
             }
 
@@ -516,3 +523,13 @@ private fun RowScope.MetricItem(label: String, value: String) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
     }
 }
+
+/** 最多保留一位小数，整数则不显示 .0 */
+private fun trimNum(value: Double): String {
+    val rounded = (value * 10.0).roundToInt() / 10.0
+    return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+}
+
+private fun pctText(value: Double): String = if (value > 0.0) "${trimNum(value)}%" else "--"
+
+private fun kgText(value: Double): String = if (value > 0.0) "${trimNum(value)} kg" else "--"
