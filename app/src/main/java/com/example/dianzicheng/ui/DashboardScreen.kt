@@ -53,7 +53,7 @@ fun DashboardScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("阿福数据同步", fontWeight = FontWeight.Bold)
                         Text(
-                            "v2.0.5 纯原生无障碍抓取",
+                            "v2.0.6 纯原生无障碍抓取",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )

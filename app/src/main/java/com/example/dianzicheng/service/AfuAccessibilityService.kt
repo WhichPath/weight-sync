@@ -93,8 +93,18 @@ class AfuAccessibilityService : AccessibilityService() {
                 return@launch
             }
 
+            // 用户处于详情面板：只截取弹窗部分的节点进行累加，坚决屏蔽弹窗背后的主页节点
+            val dialogCutoffIdx = currentTexts.indexOfFirst {
+                it.contains("身体指标记录") || (it.contains("共") && it.contains("条记录") && it.contains("更新于"))
+            }
+            val pureDialogTexts = if (dialogCutoffIdx != -1) {
+                currentTexts.subList(dialogCutoffIdx, currentTexts.size)
+            } else {
+                currentTexts
+            }
+
             isInsideDialog = true
-            dialogAccumulatedTexts.addAll(currentTexts)
+            dialogAccumulatedTexts.addAll(pureDialogTexts)
 
             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             val rawTextsList = dialogAccumulatedTexts.toList()
