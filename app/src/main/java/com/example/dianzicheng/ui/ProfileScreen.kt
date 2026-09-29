@@ -56,11 +56,9 @@ fun ProfileScreen(
     val healthConnectEnabled by viewModel.healthConnectEnabled.collectAsState()
     val isOperating by viewModel.isOperating.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
-    val logEntries by viewModel.logEntries.collectAsState()
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showGarminLoginDialog by remember { mutableStateOf(false) }
-    var showLogDialog by remember { mutableStateOf(false) }
     var showUnpairConfirmDialog by remember { mutableStateOf(false) }
 
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
@@ -258,24 +256,11 @@ fun ProfileScreen(
                             Text("无障碍 UI 自动化截获", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                         }
                         Text(
-                            text = "本版本已移除蓝牙直连扫描逻辑。无需配对电子秤，只需在阿福 App 测秤后打开身体指标详情页，即可自动提取 100% 官方计算指标并上传 Garmin。",
+                            text = "无需配对电子秤，只需在阿福 App 测秤后打开身体指标详情页，即可自动提取 100% 官方计算指标并上传 Garmin。抓取排查日志已统合至首页【排查日志】。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            }
-
-            // ── 5. 系统日志 ──────────────────────────────────────────────────
-            item {
-                SectionHeader("调试与日志")
-                OutlinedButton(
-                    onClick = { showLogDialog = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Article, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("查看应用运行日志 (${logEntries.size} 条)")
                 }
             }
         }
@@ -319,15 +304,6 @@ fun ProfileScreen(
             dismissButton = {
                 TextButton(onClick = { showUnpairConfirmDialog = false }) { Text("取消") }
             }
-        )
-    }
-
-    // ── 运行日志弹窗 ──────────────────────────────────────────────────────────
-    if (showLogDialog) {
-        LogDialog(
-            entries = logEntries,
-            onDismiss = { showLogDialog = false },
-            onClear = { viewModel.clearLogs() }
         )
     }
 }
@@ -402,49 +378,4 @@ private fun EditProfileDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
-}
-
-@Composable
-private fun LogDialog(
-    entries: List<AppLogger.LogEntry>,
-    onDismiss: () -> Unit,
-    onClear: () -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .clip(RoundedCornerShape(16.dp)),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("运行日志 (${entries.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Row {
-                        TextButton(onClick = onClear) { Text("清空") }
-                        IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "关闭") }
-                    }
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                LazyColumn(modifier = Modifier.fillMaxSize(), reverseLayout = true) {
-                    items(entries.reversed()) { log ->
-                        Text(
-                            text = "[${log.time}] [${log.level}] ${log.tag}: ${log.message}",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
