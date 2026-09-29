@@ -29,10 +29,10 @@ jobs:
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew
 
+      # 注意：AGP 9 只生成 debug 变体的单元测试任务（不存在 testReleaseUnitTest），
+      # 这里用聚合任务 test 跑解析器回归用例，测试通过后才打包 Release APK。
       - name: Run Unit Tests (Afu parser regression)
-        run: |
-          ./gradlew tasks --all --console=plain 2>&1 | grep -iE "unittest" | head -20 || true
-          ./gradlew test --stacktrace
+        run: ./gradlew test --stacktrace
 
       - name: Build with Gradle (Assemble Release)
         run: ./gradlew assembleRelease --stacktrace
