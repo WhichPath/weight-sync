@@ -72,6 +72,12 @@ class ScaleViewModel(
         }
 
         viewModelScope.launch {
+            AfuAccessibilityService.lastRawInspectionLog.collect { log ->
+                _uiState.update { it.copy(rawInspectionLog = log) }
+            }
+        }
+
+        viewModelScope.launch {
             AfuAccessibilityService.isServiceActive.collect { active ->
                 _uiState.update { it.copy(isAccessibilityEnabled = active || AccessibilityUtils.isAccessibilityServiceEnabled(context)) }
             }

@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 private const val TAG = "AfuAccessibilityService"
@@ -42,6 +45,10 @@ class AfuAccessibilityService : AccessibilityService() {
 
         private val _lastScrapeLog = MutableStateFlow<String>("等待进入阿福【测量详情】面板...")
         val lastScrapeLog: StateFlow<String> = _lastScrapeLog.asStateFlow()
+
+        // 供 UI 排查面板实时查看的原始文本与解析细节
+        private val _lastRawInspectionLog = MutableStateFlow<String>("暂无捕获排查数据。在阿福打开测量详情后在此处查看抓取到的原始文本。")
+        val lastRawInspectionLog: StateFlow<String> = _lastRawInspectionLog.asStateFlow()
     }
 
     override fun onServiceConnected() {
@@ -72,7 +79,7 @@ class AfuAccessibilityService : AccessibilityService() {
 
             if (currentTexts.isEmpty()) return@launch
 
-            // 严格过滤：只有当用户在阿福中点击并展示“身体指标记录”详情面板时才介入收集！
+            // 严格过滤：只有当用户在阿福中展示“身体指标记录”详情面板时才介入收集！
             val isDetailDialog = currentTexts.any { it.contains("身体指标记录") } ||
                     (currentTexts.any { it.contains("内脏脂肪") } && currentTexts.any { it.contains("体脂率") })
 
@@ -89,8 +96,34 @@ class AfuAccessibilityService : AccessibilityService() {
             isInsideDialog = true
             dialogAccumulatedTexts.addAll(currentTexts)
 
+            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val rawTextsList = dialogAccumulatedTexts.toList()
+
+            AppLogger.d(TAG, "[$timeStr] 处于阿福详情面板，已累加可见文本 ${rawTextsList.size} 条")
+
             val profile = preferenceManager.userProfile.first() ?: UserProfile()
-            val parseResult = AfuUiParser.parseScreenTexts(dialogAccumulatedTexts.toList(), profile) ?: return@launch
+            val parseResult = AfuUiParser.parseScreenTexts(rawTextsList, profile)
+
+            // 更新实时排查日志，方便在 UI 上随时查看
+            val inspectionBuilder = StringBuilder()
+            inspectionBuilder.append("【更新时间】$timeStr\n")
+            inspectionBuilder.append("【累加节点数】${rawTextsList.size} 条\n")
+            if (parseResult != null) {
+                inspectionBuilder.append("【解析状态】成功 (匹配 ${parseResult.matchedFieldsCount} 项)\n")
+                inspectionBuilder.append("【核心数据】体重=${parseResult.measurement.weightKg}kg, 体脂=${parseResult.measurement.bodyFatPct}%, 肌肉=${parseResult.measurement.muscleKg}kg\n")
+                inspectionBuilder.append("【匹配详情】${parseResult.rawMatches}\n")
+            } else {
+                inspectionBuilder.append("【解析状态】等待核心字段（体重/体脂），尚未满足或未滑动到位\n")
+            }
+            inspectionBuilder.append("【抓取到的全部原始文本】:\n")
+            rawTextsList.forEachIndexed { idx, txt ->
+                inspectionBuilder.append("  [$idx] $txt\n")
+            }
+            _lastRawInspectionLog.value = inspectionBuilder.toString()
+
+            if (parseResult == null) {
+                return@launch
+            }
 
             // 若本次提取到的有效项数没有超过已保存的项数，且指纹相同，则不需要重复写入
             if (parseResult.fingerprint == lastProcessedFingerprint && parseResult.matchedFieldsCount <= lastMatchedFieldsCount) {
@@ -113,7 +146,7 @@ class AfuAccessibilityService : AccessibilityService() {
             lastProcessedFingerprint = parseResult.fingerprint
             lastMatchedFieldsCount = parseResult.matchedFieldsCount
 
-            AppLogger.i(TAG, "从阿福详情面板提取成功: 体重 ${measurement.weightKg}kg / 体脂 ${measurement.bodyFatPct}% / 骨骼肌 ${measurement.skeletalMuscleKg}kg (${parseResult.matchedFieldsCount}项)")
+            AppLogger.i(TAG, "详情面板提取成功: 体重 ${measurement.weightKg}kg / 体脂 ${measurement.bodyFatPct}% / 骨骼肌 ${measurement.skeletalMuscleKg}kg (${parseResult.matchedFieldsCount}项)")
 
             val savedRecord = scaleRepository.saveMeasurement(measurement) ?: return@launch
             _lastCapturedMeasurement.value = savedRecord
