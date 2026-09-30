@@ -14,3 +14,4 @@ ref_*/
 *.fit
 .kotlin/
 output_apk/
+release-apk/
