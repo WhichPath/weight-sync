@@ -55,6 +55,33 @@ class GarminFitEncoderTest {
     }
 
     @Test
+    fun testEncodingSkeletalMuscleMass() {
+        val measurement = BodyMeasurement(
+            id = "test-skel",
+            measuredAtEpochMs = 1711536000000L,
+            weightKg = 80.0,
+            skeletalMuscleKg = 35.5,
+            muscleKg = 60.0
+        )
+        val fitBytes = GarminFitEncoder.encodeToBytes(measurement)
+        assertNotNull(fitBytes)
+        // 35.5 * 100 = 3550 (0x0DDE)
+        val targetSkel = (35.5 * 100.0).toInt()
+        val lowByte = (targetSkel and 0xFF).toByte()
+        val highByte = ((targetSkel shr 8) and 0xFF).toByte()
+
+        // 验证生成的二进制中包含骨骼肌质量对应的数值 (0xDE, 0x0D) 而非肌肉总量 (6000 = 0x70, 0x17)
+        var foundSkel = false
+        for (i in 0 until fitBytes.size - 1) {
+            if (fitBytes[i] == lowByte && fitBytes[i + 1] == highByte) {
+                foundSkel = true
+                break
+            }
+        }
+        assertTrue("FIT 二进制应包含骨骼肌量数值 35.5kg 编码 (3550)", foundSkel)
+    }
+
+    @Test
     fun testBodyAlgorithmCoverage() {
         val profile = UserProfile(
             sex = Sex.MALE,

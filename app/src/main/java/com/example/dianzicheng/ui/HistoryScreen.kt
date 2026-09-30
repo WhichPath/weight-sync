@@ -109,6 +109,7 @@ fun HistoryScreen(
                     MeasurementHistoryCard(
                         measurement = measurement,
                         dateStr = dateFormat.format(Date(measurement.measuredAtEpochMs)),
+                        onClick = { onNavigateToDetail(measurement.id) },
                         onDelete = { measurementToDelete = measurement },
                         onSyncGarmin = { viewModel.syncToGarmin(measurement) }
                     )
@@ -122,11 +123,14 @@ fun HistoryScreen(
 private fun MeasurementHistoryCard(
     measurement: BodyMeasurement,
     dateStr: String,
+    onClick: () -> Unit,
     onDelete: () -> Unit,
     onSyncGarmin: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -138,12 +142,20 @@ private fun MeasurementHistoryCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = dateStr,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = dateStr,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "详情 >",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
                 IconButton(onClick = onDelete, modifier = Modifier.size(24.dp)) {
                     Icon(
                         Icons.Default.Delete,
@@ -209,15 +221,24 @@ private fun MeasurementHistoryCard(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 MetricItem("BMI", String.format("%.1f", measurement.bmi), "")
                 MetricItem("体脂率", if (measurement.bodyFatPct > 0) "${measurement.bodyFatPct}%" else "--", "")
+                val skel = measurement.skeletalMuscleKg
+                if (skel > 0) {
+                    MetricItem("骨骼肌", "${skel}kg", "")
+                } else {
+                    MetricItem("肌肉量", if (measurement.muscleKg > 0) "${measurement.muscleKg}kg" else "--", "")
+                }
                 MetricItem("水分率", if (measurement.waterPct > 0) "${measurement.waterPct}%" else "--", "")
-                MetricItem("肌肉量", if (measurement.muscleKg > 0) "${measurement.muscleKg}kg" else "--", "")
             }
             Spacer(modifier = Modifier.height(10.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 MetricItem("骨量", if (measurement.boneMassKg > 0) "${measurement.boneMassKg}kg" else "--", "")
-                MetricItem("基础代谢", if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()}kcal" else "--", "")
+                if (measurement.skeletalMuscleKg > 0) {
+                    MetricItem("肌肉量", if (measurement.muscleKg > 0) "${measurement.muscleKg}kg" else "--", "")
+                } else {
+                    MetricItem("基础代谢", if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()}kcal" else "--", "")
+                }
                 MetricItem("内脏脂肪", if (measurement.visceralFatRating > 0) "${measurement.visceralFatRating}级" else "--", "")
-                MetricItem("身体年龄", if (measurement.metabolicAge > 0) "${measurement.metabolicAge}岁" else "--", "")
+                MetricItem("基础代谢", if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()}kcal" else "--", "")
             }
         }
     }

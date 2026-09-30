@@ -103,7 +103,13 @@ object GarminFitEncoder {
         writeUInt16LE(recordsStream, (measurement.bodyFatPct * 100.0).roundToInt().coerceIn(0, 65534))
         writeUInt16LE(recordsStream, (measurement.waterPct * 100.0).roundToInt().coerceIn(0, 65534))
         writeUInt16LE(recordsStream, (measurement.boneMassKg * 100.0).roundToInt().coerceIn(0, 65534))
-        writeUInt16LE(recordsStream, (measurement.muscleKg * 100.0).roundToInt().coerceIn(0, 65534))
+        // Garmin 将 Field 5 (muscle_mass) 映射并展示为骨骼肌质量 (Skeletal Muscle Mass)
+        val skeletalMuscle = if (measurement.skeletalMuscleKg > 0.0) {
+            measurement.skeletalMuscleKg
+        } else {
+            measurement.muscleKg
+        }
+        writeUInt16LE(recordsStream, (skeletalMuscle * 100.0).roundToInt().coerceIn(0, 65534))
         writeUInt16LE(recordsStream, (measurement.basalMetKcal * 4.0).roundToInt().coerceIn(0, 65534))
         recordsStream.write(measurement.metabolicAge.coerceIn(1, 254))
         recordsStream.write(measurement.visceralFatRating.coerceIn(1, 254))

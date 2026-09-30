@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -50,6 +52,7 @@ class AfuAccessibilityService : AccessibilityService() {
     private lateinit var database: AppDatabase
     private lateinit var scaleRepository: ScaleRepository
     private lateinit var preferenceManager: PreferenceManager
+    private val saveMutex = Mutex()
 
     // ── 会话状态（一次弹窗打开 = 一个会话） ──
     private var sessionKey: String? = null
@@ -110,94 +113,109 @@ class AfuAccessibilityService : AccessibilityService() {
 
     private fun handleSheet(sheetTexts: List<String>, stamp: String) {
         serviceScope.launch {
-            val snapshot = AfuUiParser.parseSheet(sheetTexts)
-            if (snapshot == null) {
-                publishLog(stamp, sheetTexts, null, "未识别到时序正确的弹窗内容")
-                return@launch
-            }
-
-            val key = snapshot.sheetKey.ifBlank { "sheet@${snapshot.timeStr}" }
-            if (key != sessionKey) startSession(key)
-
-            // ① 记录体重锚点（只认“最新一次称重”那块记录）
-            if (snapshot.anchored && snapshot.weightKg != null) {
-                val weight = snapshot.weightKg
-                val previousWeight = sessionWeight
-                if (previousWeight != null && abs(previousWeight - weight) > 0.05) {
-                    // 弹窗表头没变却读到另一个体重 → 用户展开了别的记录，重建会话
-                    startSession(key)
+            saveMutex.withLock {
+                val snapshot = AfuUiParser.parseSheet(sheetTexts)
+                if (snapshot == null) {
+                    publishLog(stamp, sheetTexts, null, "未识别到时序正确的弹窗内容")
+                    return@withLock
                 }
-                sessionWeight = weight
-                sessionEpochMs = snapshot.measuredAtEpochMs
-            }
 
-            // ② 合并指标
-            if (snapshot.metrics.isNotEmpty()) {
-                if (snapshot.anchored) {
-                    sessionMetrics.putAll(snapshot.metrics)
-                } else {
-                    // 表头已滚出屏幕：用“体重 ↔ 率/量”的物理关系校验，避免混入历史记录
-                    val candidate = LinkedHashMap(sessionMetrics).apply { putAll(snapshot.metrics) }
-                    if (isPhysicallyConsistent(candidate, sessionWeight)) {
+                val key = snapshot.sheetKey.ifBlank { "sheet@${snapshot.timeStr}" }
+                if (key != sessionKey) startSession(key)
+
+                // ① 记录体重锚点（只认“最新一次称重”那块记录）
+                if (snapshot.anchored && snapshot.weightKg != null) {
+                    val weight = snapshot.weightKg
+                    val previousWeight = sessionWeight
+                    if (previousWeight != null && abs(previousWeight - weight) > 0.05) {
+                        // 弹窗表头没变却读到另一个体重 → 用户展开了别的记录，重建会话
+                        startSession(key)
+                    }
+                    sessionWeight = weight
+                    sessionEpochMs = snapshot.measuredAtEpochMs
+                }
+
+                // ② 合并指标
+                if (snapshot.metrics.isNotEmpty()) {
+                    if (snapshot.anchored) {
                         sessionMetrics.putAll(snapshot.metrics)
+                    } else {
+                        // 表头已滚出屏幕：用“体重 ↔ 率/量”的物理关系校验，避免混入历史记录
+                        val candidate = LinkedHashMap(sessionMetrics).apply { putAll(snapshot.metrics) }
+                        if (isPhysicallyConsistent(candidate, sessionWeight)) {
+                            sessionMetrics.putAll(snapshot.metrics)
+                        }
                     }
                 }
-            }
 
-            val weight = sessionWeight
-            val epoch = sessionEpochMs
-            if (weight == null || epoch == null) {
-                publishLog(stamp, sheetTexts, snapshot, "已识别弹窗，但目标记录的体重表头尚未进入视图")
-                return@launch
-            }
+                val weight = sessionWeight
+                val epoch = sessionEpochMs
+                if (weight == null || epoch == null) {
+                    publishLog(stamp, sheetTexts, snapshot, "已识别弹窗，但目标记录的体重表头尚未进入视图")
+                    return@withLock
+                }
 
-            val fat = sessionMetrics[AfuUiParser.Metric.BODY_FAT.key]
-            val totalFields = sessionMetrics.size + 1
-            if (fat == null || sessionMetrics.size < 5) {
-                publishLog(stamp, sheetTexts, snapshot, "等待更多指标（已捕获 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT}）")
-                return@launch
-            }
+                val fat = sessionMetrics[AfuUiParser.Metric.BODY_FAT.key]
+                val totalFields = sessionMetrics.size + 1
+                if (fat == null || sessionMetrics.size < 5) {
+                    publishLog(stamp, sheetTexts, snapshot, "等待更多指标（已捕获 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT}）")
+                    return@withLock
+                }
 
-            val fingerprint = "$key|$weight|$fat"
-            if (fingerprint == lastPublishedFingerprint && totalFields <= lastPublishedFields) {
-                publishLog(stamp, sheetTexts, snapshot, "数据无变化")
-                return@launch
-            }
+                val fingerprint = "$key|$weight|$fat"
+                if (fingerprint == lastPublishedFingerprint && totalFields <= lastPublishedFields) {
+                    publishLog(stamp, sheetTexts, snapshot, "数据无变化")
+                    return@withLock
+                }
 
-            val profile = preferenceManager.userProfile.first() ?: UserProfile()
-            val measurement = AfuUiParser.buildMeasurement(weight, epoch, sessionMetrics, profile)
+                val profile = preferenceManager.userProfile.first() ?: UserProfile()
+                val measurement = AfuUiParser.buildMeasurement(weight, epoch, sessionMetrics, profile)
 
-            // 同一分钟内、体重一致 => 认为是同一条记录，用同一主键覆盖更新，避免滚动过程产生多条记录
-            val existing = scaleRepository.getAllMeasurements().firstOrNull {
-                abs(it.measuredAtEpochMs - epoch) < 120_000L && abs(it.weightKg - weight) < 0.05
-            }
-            if (existing != null && totalFields < countCapturedFields(existing)) {
-                publishLog(stamp, sheetTexts, snapshot, "库中已有更完整记录，跳过覆盖")
-                return@launch
-            }
+                val allHistory = scaleRepository.getAllMeasurements()
 
-            val toSave = if (existing != null) measurement.copy(id = existing.id) else measurement
-            val saved = scaleRepository.saveMeasurement(toSave)
-            if (saved == null) {
-                publishLog(stamp, sheetTexts, snapshot, "数据无效（体重 < 10kg），已忽略")
-                return@launch
-            }
+                // 同一分钟内、体重一致 => 认为是同一条记录，用同一主键覆盖更新，避免滚动过程产生多条记录
+                val existing = allHistory.firstOrNull {
+                    abs(it.measuredAtEpochMs - epoch) < 120_000L && abs(it.weightKg - weight) < 0.05
+                }
+                if (existing != null && totalFields < countCapturedFields(existing)) {
+                    publishLog(stamp, sheetTexts, snapshot, "库中已有更完整记录，跳过覆盖")
+                    return@withLock
+                }
 
-            lastPublishedFingerprint = fingerprint
-            lastPublishedFields = totalFields
-            _lastCapturedMeasurement.value = saved
-            _lastScrapeLog.value = "已从详情面板截获: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}% " +
-                    "(共 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项，待确认上传)"
-            publishLog(stamp, sheetTexts, snapshot, null)
+                // 去重逻辑：与已有记录或上一次保存记录比较，如果所有项完全一致则不保存
+                if (existing != null && isAllFieldsIdentical(measurement, existing)) {
+                    publishLog(stamp, sheetTexts, snapshot, "所有项与当前已有记录完全一致，跳过重复保存")
+                    return@withLock
+                }
+                val latest = allHistory.firstOrNull()
+                if (latest != null && isAllFieldsIdentical(measurement, latest)) {
+                    publishLog(stamp, sheetTexts, snapshot, "所有项与上一次数据完全一致，跳过重复保存")
+                    return@withLock
+                }
 
-            if (!toastShown) {
-                toastShown = true
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        applicationContext,
-                        "已截获详情: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}%（$totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项）",
-                        Toast.LENGTH_LONG
-                    ).show()
+                val toSave = if (existing != null) measurement.copy(id = existing.id) else measurement
+                val saved = scaleRepository.saveMeasurement(toSave)
+                if (saved == null) {
+                    publishLog(stamp, sheetTexts, snapshot, "数据无效（体重 < 10kg），已忽略")
+                    return@withLock
+                }
+
+                lastPublishedFingerprint = fingerprint
+                lastPublishedFields = totalFields
+                _lastCapturedMeasurement.value = saved
+                _lastScrapeLog.value = "已从详情面板截获: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}% " +
+                        "(共 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项，待确认上传)"
+                publishLog(stamp, sheetTexts, snapshot, null)
+
+                if (!toastShown) {
+                    toastShown = true
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            applicationContext,
+                            "已截获详情: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}%（$totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项）",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
         }
@@ -237,6 +255,29 @@ class AfuAccessibilityService : AccessibilityService() {
                     "【前台预览】$preview\n" +
                     "【操作提示】请在阿福点击【测量详情】展开身体指标弹窗"
         }
+    }
+
+    /**
+     * 判断两条测量记录的所有身体指标是否完全一致（用于防止重复保存）。
+     */
+    private fun isAllFieldsIdentical(a: BodyMeasurement, b: BodyMeasurement): Boolean {
+        return abs(a.weightKg - b.weightKg) < 0.01 &&
+                abs(a.bodyFatPct - b.bodyFatPct) < 0.01 &&
+                abs(a.muscleKg - b.muscleKg) < 0.01 &&
+                abs(a.waterPct - b.waterPct) < 0.01 &&
+                abs(a.proteinPct - b.proteinPct) < 0.01 &&
+                abs(a.boneMassKg - b.boneMassKg) < 0.01 &&
+                a.visceralFatRating == b.visceralFatRating &&
+                abs(a.basalMetKcal - b.basalMetKcal) < 0.1 &&
+                abs(a.fatMassKg - b.fatMassKg) < 0.01 &&
+                abs(a.subcutaneousFatPct - b.subcutaneousFatPct) < 0.01 &&
+                abs(a.subcutaneousFatKg - b.subcutaneousFatKg) < 0.01 &&
+                abs(a.boneMassPct - b.boneMassPct) < 0.01 &&
+                abs(a.musclePct - b.musclePct) < 0.01 &&
+                abs(a.waterKg - b.waterKg) < 0.01 &&
+                abs(a.proteinKg - b.proteinKg) < 0.01 &&
+                abs(a.skeletalMusclePct - b.skeletalMusclePct) < 0.01 &&
+                abs(a.skeletalMuscleKg - b.skeletalMuscleKg) < 0.01
     }
 
     /**

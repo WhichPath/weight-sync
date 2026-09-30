@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.dianzicheng.domain.BodyMeasurement
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -58,7 +59,7 @@ fun MeasurementDetailScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .verticalScroll(rememberScrollState())
-                    .padding(24.dp),
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
@@ -111,68 +112,156 @@ fun MeasurementDetailScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // 主重量显示
+                // 主重量与 BMI 显示
                 Text(
-                    text = String.format("%.2f", measurement.weightKg),
-                    fontSize = 56.sp,
+                    text = String.format(Locale.getDefault(), "%.2f", measurement.weightKg),
+                    fontSize = 52.sp,
                     fontWeight = FontWeight.Black,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
                     text = "kg",
-                    fontSize = 18.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.outline
                 )
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-                // 身体成分 10 项指标网格
+                // ── 卡片 1：Garmin Connect 官方同步 6 项指标 ──
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                 ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Text(
-                            text = "Garmin 兼容身体成分分析",
+                            text = "佳明 Garmin Connect 同步指标 (6项)",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 16.dp)
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 14.dp)
                         )
 
-                        val hasBia = measurement.impedanceOhm > 0.0 && measurement.bodyFatPct > 0.0
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            DetailGridItem("体重", "${measurement.weightKg} kg", modifier = Modifier.weight(1f))
+                            DetailGridItem("BMI", if (measurement.bmi > 0) String.format(Locale.getDefault(), "%.1f", measurement.bmi) else "--", modifier = Modifier.weight(1f))
+                            DetailGridItem("体内脂肪", if (measurement.bodyFatPct > 0) "${measurement.bodyFatPct}%" else "--", modifier = Modifier.weight(1f))
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            val skelVal = if (measurement.skeletalMuscleKg > 0) {
+                                "${measurement.skeletalMuscleKg} kg"
+                            } else if (measurement.muscleKg > 0) {
+                                "${measurement.muscleKg} kg"
+                            } else {
+                                "--"
+                            }
+                            DetailGridItem("骨骼肌质量", skelVal, modifier = Modifier.weight(1f))
+                            DetailGridItem("骨骼质量", if (measurement.boneMassKg > 0) "${measurement.boneMassKg} kg" else "--", modifier = Modifier.weight(1f))
+                            DetailGridItem("体内水分", if (measurement.waterPct > 0) "${measurement.waterPct}%" else "--", modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
 
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // ── 卡片 2：阿福身体成分全量指标（17项明细） ──
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Text(
+                            text = "阿福身体成分详测明细 (17项)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+
+                        // 脂肪与内脏
+                        CategoryHeader("脂肪分布")
                         Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("BMI", if (measurement.bmi > 0.0) String.format("%.1f", measurement.bmi) else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("体脂率", if (hasBia) String.format("%.1f%%", measurement.bodyFatPct) else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("水分率", if (hasBia) String.format("%.1f%%", measurement.waterPct) else "--", modifier = Modifier.weight(1f))
+                            DetailGridItem("体脂率", formatPct(measurement.bodyFatPct), modifier = Modifier.weight(1f))
+                            DetailGridItem("脂肪量", formatKg(measurement.fatMassKg), modifier = Modifier.weight(1f))
+                            DetailGridItem("内脏脂肪", if (measurement.visceralFatRating > 0) "${measurement.visceralFatRating} 级" else "--", modifier = Modifier.weight(1f))
                         }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("肌肉量", if (hasBia) String.format("%.2fkg", measurement.muscleKg) else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("骨量", if (hasBia) String.format("%.2fkg", measurement.boneMassKg) else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("蛋白质", if (hasBia) String.format("%.1f%%", measurement.proteinPct) else "--", modifier = Modifier.weight(1f))
-                        }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("基础代谢", if (hasBia && measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()}kcal" else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("内脏脂肪", if (hasBia && measurement.visceralFatRating > 0) "${measurement.visceralFatRating}级" else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("身体年龄", if (hasBia && measurement.metabolicAge > 0) "${measurement.metabolicAge}岁" else "--", modifier = Modifier.weight(1f))
-                        }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("电阻抗", if (measurement.impedanceOhm > 0.0) "${measurement.impedanceOhm.toInt()} Ω" else "未测出", modifier = Modifier.weight(1f))
-                            DetailGridItem("原始阻抗", if (measurement.impedanceOhm > 0.0) "有效" else "--", modifier = Modifier.weight(1f))
+                            DetailGridItem("皮下脂肪率", formatPct(measurement.subcutaneousFatPct), modifier = Modifier.weight(1f))
+                            DetailGridItem("皮下脂肪量", formatKg(measurement.subcutaneousFatKg), modifier = Modifier.weight(1f))
                             Spacer(modifier = Modifier.weight(1f))
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                        // 肌肉与骨骼
+                        CategoryHeader("肌肉与骨骼")
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            DetailGridItem("骨骼肌量", formatKg(measurement.skeletalMuscleKg), modifier = Modifier.weight(1f))
+                            DetailGridItem("骨骼肌率", formatPct(measurement.skeletalMusclePct), modifier = Modifier.weight(1f))
+                            DetailGridItem("肌肉总量", formatKg(measurement.muscleKg), modifier = Modifier.weight(1f))
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            DetailGridItem("肌肉率", formatPct(measurement.musclePct), modifier = Modifier.weight(1f))
+                            DetailGridItem("骨量", formatKg(measurement.boneMassKg), modifier = Modifier.weight(1f))
+                            DetailGridItem("骨量占比", formatPct(measurement.boneMassPct), modifier = Modifier.weight(1f))
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                        // 水分与蛋白质
+                        CategoryHeader("水分与蛋白质")
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            DetailGridItem("水分率", formatPct(measurement.waterPct), modifier = Modifier.weight(1f))
+                            DetailGridItem("水分量", formatKg(measurement.waterKg), modifier = Modifier.weight(1f))
+                            DetailGridItem("蛋白质率", formatPct(measurement.proteinPct), modifier = Modifier.weight(1f))
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            DetailGridItem("蛋白质量", formatKg(measurement.proteinKg), modifier = Modifier.weight(1f))
+                            Spacer(modifier = Modifier.weight(1f))
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                        // 代谢与体态
+                        CategoryHeader("代谢与身体状态")
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            DetailGridItem("基础代谢", if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()} kcal" else "--", modifier = Modifier.weight(1f))
+                            DetailGridItem("身体年龄", if (measurement.metabolicAge > 0) "${measurement.metabolicAge} 岁" else "--", modifier = Modifier.weight(1f))
+                            val impText = if (measurement.impedanceOhm > 0) "${measurement.impedanceOhm.toInt()} Ω" else "未测出"
+                            DetailGridItem("电阻抗", impText, modifier = Modifier.weight(1f))
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CategoryHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+}
+
+private fun formatPct(value: Double): String {
+    return if (value > 0.0) String.format(Locale.getDefault(), "%.1f%%", value) else "--"
+}
+
+private fun formatKg(value: Double): String {
+    return if (value > 0.0) String.format(Locale.getDefault(), "%.2f kg", value) else "--"
 }
 
 @Composable
@@ -183,6 +272,6 @@ fun DetailGridItem(label: String, value: String, modifier: Modifier = Modifier) 
     ) {
         Text(text = label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
         Spacer(modifier = Modifier.height(4.dp))
-        Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
     }
 }
