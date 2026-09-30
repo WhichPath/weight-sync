@@ -60,8 +60,14 @@ class GarminFitEncoderTest {
             id = "test-skel",
             measuredAtEpochMs = 1711536000000L,
             weightKg = 80.0,
-            skeletalMuscleKg = 35.5,
-            muscleKg = 60.0
+            impedanceOhm = 0.0,
+            bmi = 24.0,
+            bodyFatPct = 18.0,
+            muscleKg = 60.0,
+            waterPct = 60.0,
+            proteinPct = 18.0,
+            boneMassKg = 3.2,
+            skeletalMuscleKg = 35.5
         )
         val fitBytes = GarminFitEncoder.encodeToBytes(measurement)
         assertNotNull(fitBytes)
