@@ -8,8 +8,8 @@
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFFFF"
         android:strokeWidth="1.8"
-        android:strokeCap="round"
-        android:strokeJoin="round"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
         android:pathData="M5,2 L19,2 A3,3 0 0 1 22,5 L22,19 A3,3 0 0 1 19,22 L5,22 A3,3 0 0 1 2,19 L2,5 A3,3 0 0 1 5,2 Z" />
     <!-- 顶部显示屏 -->
     <path
@@ -20,7 +20,7 @@
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFFFF"
         android:strokeWidth="1.5"
-        android:strokeCap="round"
+        android:strokeLineCap="round"
         android:pathData="M9,13.5 A3.5,3.5 0 0 1 15,11.5" />
     <path
         android:fillColor="#FFFFFFFF"
@@ -29,7 +29,7 @@
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFFFF"
         android:strokeWidth="1.5"
-        android:strokeCap="round"
+        android:strokeLineCap="round"
         android:pathData="M15,15.5 A3.5,3.5 0 0 1 9,17.5" />
     <path
         android:fillColor="#FFFFFFFF"
