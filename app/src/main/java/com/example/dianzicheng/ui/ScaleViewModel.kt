@@ -33,6 +33,7 @@ class ScaleViewModel(
     val uiState: StateFlow<ScaleUiState> = _uiState.asStateFlow()
 
     init {
+        refreshStatus()
         observeUserProfile()
         observeScrapedData()
         loadLatestRecord()
@@ -40,10 +41,12 @@ class ScaleViewModel(
 
     fun refreshStatus() {
         val isAccEnabled = AccessibilityUtils.isAccessibilityServiceEnabled(context) || AfuAccessibilityService.isServiceActive.value
+        val isBatteryIgnored = AccessibilityUtils.isIgnoringBatteryOptimizations(context)
 
         _uiState.update {
             it.copy(
-                isAccessibilityEnabled = isAccEnabled
+                isAccessibilityEnabled = isAccEnabled,
+                isBatteryOptimizationIgnored = isBatteryIgnored
             )
         }
     }
@@ -79,7 +82,14 @@ class ScaleViewModel(
 
         viewModelScope.launch {
             AfuAccessibilityService.isServiceActive.collect { active ->
-                _uiState.update { it.copy(isAccessibilityEnabled = active || AccessibilityUtils.isAccessibilityServiceEnabled(context)) }
+                val isAccEnabled = active || AccessibilityUtils.isAccessibilityServiceEnabled(context)
+                val isBatteryIgnored = AccessibilityUtils.isIgnoringBatteryOptimizations(context)
+                _uiState.update {
+                    it.copy(
+                        isAccessibilityEnabled = isAccEnabled,
+                        isBatteryOptimizationIgnored = isBatteryIgnored
+                    )
+                }
             }
         }
     }

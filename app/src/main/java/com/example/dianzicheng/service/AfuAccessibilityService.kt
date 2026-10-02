@@ -1,9 +1,19 @@
 package com.example.dianzicheng.service
 
 import android.accessibilityservice.AccessibilityService
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
+import com.example.dianzicheng.MainActivity
+import com.example.dianzicheng.R
 import com.example.dianzicheng.data.local.AppDatabase
 import com.example.dianzicheng.data.local.AppLogger
 import com.example.dianzicheng.data.local.PreferenceManager
@@ -29,6 +39,8 @@ import kotlin.math.abs
 
 private const val TAG = "AfuAccessibilityService"
 private const val AFU_PACKAGE = "com.antgroup.aijk.android"
+private const val NOTIFICATION_CHANNEL_ID = "afu_accessibility_keepalive"
+private const val NOTIFICATION_ID = 1001
 
 /** 详情弹窗关闭判定：静默超过该时长即认为弹窗已关闭（避免 Toast 等零散窗口误判） */
 private const val SHEET_TIMEOUT_MS = 8_000L
@@ -88,7 +100,10 @@ class AfuAccessibilityService : AccessibilityService() {
         scaleRepository = ScaleRepository(database.scaleDao())
         preferenceManager = PreferenceManager(applicationContext)
 
-        AppLogger.i(TAG, "阿福无障碍服务已启动连接（按窗口隔离 + 会话化累加模式）")
+        // 启动前台服务常驻通知，锁定进程优先级，彻底防止退出后被 ColorOS/系统撤销无障碍权限
+        startForegroundKeepAlive()
+
+        AppLogger.i(TAG, "阿福无障碍服务已启动连接（前台保活模式已激活）")
         _lastScrapeLog.value = "无障碍服务已激活，请在阿福点击【测量详情】"
     }
 
@@ -206,6 +221,8 @@ class AfuAccessibilityService : AccessibilityService() {
                 _lastScrapeLog.value = "已从详情面板截获: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}% " +
                         "(共 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项，待确认上传)"
                 publishLog(stamp, sheetTexts, snapshot, null)
+
+                updateKeepAliveNotification("最新截获：${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}%（$totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项）")
 
                 if (!toastShown) {
                     toastShown = true
@@ -438,6 +455,89 @@ class AfuAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun startForegroundKeepAlive() {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
+                val channel = NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    "阿福数据监听与保活服务",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "保持后台持续监听阿福体脂数据，防止退出后无障碍权限被系统撤销"
+                    setShowBadge(false)
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val launchIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("阿福体脂同步运行中")
+                .setContentText("后台持续监听测量数据（无障碍权限常驻保护）")
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            AppLogger.i(TAG, "已启动前台保活服务，无障碍权限锁定保护已生效")
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "启动前台服务保活异常: ${e.message}")
+        }
+    }
+
+    private fun updateKeepAliveNotification(text: String) {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val launchIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("阿福体脂同步运行中")
+                .setContentText(text)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            notificationManager.notify(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
     override fun onInterrupt() {
         AppLogger.w(TAG, "阿福无障碍服务被中断")
         _isServiceActive.value = false
@@ -446,6 +546,15 @@ class AfuAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         _isServiceActive.value = false
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {
+        }
         serviceScope.cancel()
     }
 }

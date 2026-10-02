@@ -94,6 +94,18 @@ fun DashboardScreen(
                         // ignore
                     }
                 },
+                onRequestIgnoreBatteryOptimizations = {
+                    try {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        } catch (_: Exception) {}
+                    }
+                },
                 onLaunchAfu = {
                     val launchIntent = context.packageManager.getLaunchIntentForPackage("com.antgroup.aijk.android")
                     if (launchIntent != null) {
@@ -241,6 +253,7 @@ private fun ServiceStatusCard(
     uiState: ScaleUiState,
     onOpenAppDetails: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onRequestIgnoreBatteryOptimizations: () -> Unit,
     onLaunchAfu: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -278,7 +291,7 @@ private fun ServiceStatusCard(
                 StatusBadge(
                     label = "无障碍监听",
                     isActive = uiState.isAccessibilityEnabled,
-                    activeText = "已开启 (正常监听)",
+                    activeText = "已开启 (前台常驻保护中)",
                     inactiveText = "未开启"
                 )
 
@@ -290,6 +303,80 @@ private fun ServiceStatusCard(
                         Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("打开阿福 App", fontSize = 13.sp)
+                    }
+                }
+            }
+
+            // 后台保活与防掉权限保护卡片
+            Card(
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (uiState.isBatteryOptimizationIgnored)
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    else
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (uiState.isBatteryOptimizationIgnored) Icons.Default.Shield else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (uiState.isBatteryOptimizationIgnored) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "防掉权限与常驻保护",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = if (uiState.isBatteryOptimizationIgnored) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        if (uiState.isBatteryOptimizationIgnored) {
+                            Text(
+                                text = "✓ 电池无限制已生效",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = if (uiState.isBatteryOptimizationIgnored) {
+                            "已启用前台服务与电池优化白名单保护，退回后台或锁屏时无障碍权限不会丢失。\n" +
+                                    "提示：若在多任务列表中清理后台，建议下拉卡片点击【加锁】，确保无障碍持续在线。"
+                        } else {
+                            "Android 14/15 与 ColorOS 会在退出或锁屏时强制回收未加白应用的无障碍权限。\n" +
+                                    "请点击下方【开启后台无限制】，并在多任务中将本卡片【加锁】，即可永久避免重复授权！"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (!uiState.isBatteryOptimizationIgnored) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Button(
+                            onClick = onRequestIgnoreBatteryOptimizations,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(Icons.Default.BatteryChargingFull, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("一键开启后台无限制 (防掉权限)", fontSize = 12.sp)
+                        }
                     }
                 }
             }

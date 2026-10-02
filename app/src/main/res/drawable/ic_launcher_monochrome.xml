@@ -1,0 +1,56 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 秤体外轮廓 (API 33+ Monochrome / Themed Icon 规范) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeCap="round"
+        android:strokeJoin="round"
+        android:pathData="M37,25 L71,25 A13,13 0 0 1 84,38 L84,70 A13,13 0 0 1 71,83 L37,83 A13,13 0 0 1 24,70 L24,38 A13,13 0 0 1 37,25 Z" />
+
+    <!-- 顶部 LED 屏框与指示器 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,30 L64,30 A2,2 0 0 1 66,32 L66,36 A2,2 0 0 1 64,38 L44,38 A2,2 0 0 1 42,36 L42,32 A2,2 0 0 1 44,30 Z" />
+
+    <!-- 四角 ITO 金属电极感应极片 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M31,44 L41,44 A2,2 0 0 1 43,46 L43,51 A2,2 0 0 1 41,53 L31,53 A2,2 0 0 1 29,51 L29,46 A2,2 0 0 1 31,44 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M67,44 L77,44 A2,2 0 0 1 79,46 L79,51 A2,2 0 0 1 77,53 L67,53 A2,2 0 0 1 65,51 L65,46 A2,2 0 0 1 67,44 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M31,65 L41,65 A2,2 0 0 1 43,67 L43,72 A2,2 0 0 1 41,74 L31,74 A2,2 0 0 1 29,72 L29,67 A2,2 0 0 1 31,65 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M67,65 L77,65 A2,2 0 0 1 79,67 L79,72 A2,2 0 0 1 77,74 L67,74 A2,2 0 0 1 65,72 L65,67 A2,2 0 0 1 67,65 Z" />
+
+    <!-- 中心体脂同步双弧箭头徽标 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeCap="round"
+        android:pathData="M48,56 A8,8 0 0 1 60,52" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M59,50 L63,52 L59,54.5 Z" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeCap="round"
+        android:pathData="M60,62 A8,8 0 0 1 48,66" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M49,67.5 L45,65.5 L49,63 Z" />
+
+</vector>

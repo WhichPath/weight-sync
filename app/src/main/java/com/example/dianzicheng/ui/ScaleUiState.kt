@@ -8,6 +8,7 @@ import com.example.dianzicheng.domain.UserProfile
  */
 data class ScaleUiState(
     val isAccessibilityEnabled: Boolean = false,
+    val isBatteryOptimizationIgnored: Boolean = false,
     val currentMeasurement: BodyMeasurement? = null,
     val lastLogMessage: String = "正在检测无障碍服务状态...",
     val rawInspectionLog: String = "暂无排查日志",
