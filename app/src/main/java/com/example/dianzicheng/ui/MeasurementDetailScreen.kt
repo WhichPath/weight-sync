@@ -1,5 +1,6 @@
 package com.example.dianzicheng.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dianzicheng.domain.BodyMeasurement
+import com.example.dianzicheng.ui.components.GlassCard
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -30,17 +32,18 @@ fun MeasurementDetailScreen(
     val history by viewModel.history.collectAsState()
     val measurement = history.find { it.id == measurementId }
 
-    val dateFormat = remember { SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", Locale.getDefault()) }
+    val dateFormat = remember { SimpleDateFormat("yyyy年MM月dd日 HH:mm", Locale.getDefault()) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("测量详情", fontWeight = FontWeight.Bold) },
+                title = { Text("测量详情", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         }
     ) { innerPadding ->
@@ -59,185 +62,206 @@ fun MeasurementDetailScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = dateFormat.format(Date(measurement.measuredAtEpochMs)),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Garmin 同步状态卡片
-                Card(
+                // 1. Hero 概览卡片 (体重、体脂与同步状态)
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (measurement.syncedToGarmin) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(24.dp),
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (measurement.syncedToGarmin) Icons.Default.CloudDone else Icons.Default.CloudUpload,
-                                contentDescription = null,
-                                tint = if (measurement.syncedToGarmin) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                text = if (measurement.syncedToGarmin) "已同步至 Garmin Connect" else "未同步至 Garmin",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = if (measurement.syncedToGarmin) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface
+                                text = dateFormat.format(Date(measurement.measuredAtEpochMs)),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.outline
                             )
+
+                            if (measurement.syncedToGarmin) {
+                                Surface(
+                                    shape = RoundedCornerShape(100.dp),
+                                    color = Color(0xFFE8F5E9)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.CloudDone, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Garmin 已同步", color = Color(0xFF2E7D32), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            } else {
+                                Button(
+                                    onClick = { viewModel.syncToGarmin(measurement) },
+                                    shape = RoundedCornerShape(100.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("上传 Garmin", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                         }
 
-                        if (!measurement.syncedToGarmin) {
-                            Button(
-                                onClick = { viewModel.syncToGarmin(measurement) },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        // 核心体重数值
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("立即上传", fontSize = 12.sp)
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = String.format(Locale.getDefault(), "%.2f", measurement.weightKg),
+                                        style = MaterialTheme.typography.displayMedium,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                    Text("体重 (kg)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .width(1.dp)
+                                        .height(40.dp)
+                                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                )
+
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = "${trimNum(measurement.bodyFatPct)}%",
+                                        style = MaterialTheme.typography.displayMedium,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text("体脂率", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
+                                }
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // 主重量与 BMI 显示
-                Text(
-                    text = String.format(Locale.getDefault(), "%.2f", measurement.weightKg),
-                    fontSize = 52.sp,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "kg",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // ── 卡片 1：Garmin Connect 官方同步 6 项指标 ──
-                Card(
+                // 2. Garmin Connect 官方同步指标 (6项)
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
                     Column(modifier = Modifier.padding(18.dp)) {
                         Text(
-                            text = "佳明 Garmin Connect 同步指标 (6项)",
+                            text = "Garmin Connect 官方同步指标",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(bottom = 14.dp)
+                            modifier = Modifier.padding(bottom = 12.dp)
                         )
 
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("体重", "${measurement.weightKg} kg", modifier = Modifier.weight(1f))
-                            DetailGridItem("BMI", if (measurement.bmi > 0) String.format(Locale.getDefault(), "%.1f", measurement.bmi) else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("体内脂肪", if (measurement.bodyFatPct > 0) "${measurement.bodyFatPct}%" else "--", modifier = Modifier.weight(1f))
+                        val skelVal = if (measurement.skeletalMuscleKg > 0) {
+                            "${measurement.skeletalMuscleKg} kg"
+                        } else if (measurement.muscleKg > 0) {
+                            "${measurement.muscleKg} kg"
+                        } else {
+                            "--"
                         }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            val skelVal = if (measurement.skeletalMuscleKg > 0) {
-                                "${measurement.skeletalMuscleKg} kg"
-                            } else if (measurement.muscleKg > 0) {
-                                "${measurement.muscleKg} kg"
-                            } else {
-                                "--"
+
+                        val garminItems = listOf(
+                            "体重" to "${measurement.weightKg} kg",
+                            "BMI" to if (measurement.bmi > 0) String.format(Locale.getDefault(), "%.1f", measurement.bmi) else "--",
+                            "体内脂肪" to if (measurement.bodyFatPct > 0) "${measurement.bodyFatPct}%" else "--",
+                            "骨骼肌质量" to skelVal,
+                            "骨骼质量" to if (measurement.boneMassKg > 0) "${measurement.boneMassKg} kg" else "--",
+                            "体内水分" to if (measurement.waterPct > 0) "${measurement.waterPct}%" else "--"
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            garminItems.chunked(3).forEach { row ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    row.forEach { (label, value) ->
+                                        DetailItemCard(label = label, value = value, modifier = Modifier.weight(1f))
+                                    }
+                                }
                             }
-                            DetailGridItem("骨骼肌质量", skelVal, modifier = Modifier.weight(1f))
-                            DetailGridItem("骨骼质量", if (measurement.boneMassKg > 0) "${measurement.boneMassKg} kg" else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("体内水分", if (measurement.waterPct > 0) "${measurement.waterPct}%" else "--", modifier = Modifier.weight(1f))
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // ── 卡片 2：阿福身体成分全量指标（17项明细） ──
-                Card(
+                // 3. 全量身体成分指标明细 (17项)
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
                         Text(
-                            text = "阿福身体成分详测明细 (17项)",
+                            text = "身体成分全量指标明细",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 12.dp)
+                            modifier = Modifier.padding(bottom = 4.dp)
                         )
 
-                        // 脂肪与内脏
-                        CategoryHeader("脂肪分布")
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("体脂率", formatPct(measurement.bodyFatPct), modifier = Modifier.weight(1f))
-                            DetailGridItem("脂肪量", formatKg(measurement.fatMassKg), modifier = Modifier.weight(1f))
-                            DetailGridItem("内脏脂肪", if (measurement.visceralFatRating > 0) "${measurement.visceralFatRating} 级" else "--", modifier = Modifier.weight(1f))
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("皮下脂肪率", formatPct(measurement.subcutaneousFatPct), modifier = Modifier.weight(1f))
-                            DetailGridItem("皮下脂肪量", formatKg(measurement.subcutaneousFatKg), modifier = Modifier.weight(1f))
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
+                        // 脂肪分布
+                        CategorySection(
+                            title = "脂肪分布",
+                            items = listOf(
+                                "体脂率" to formatPct(measurement.bodyFatPct),
+                                "脂肪量" to formatKg(measurement.fatMassKg),
+                                "内脏脂肪" to if (measurement.visceralFatRating > 0) "${measurement.visceralFatRating} 级" else "--",
+                                "皮下脂肪率" to formatPct(measurement.subcutaneousFatPct),
+                                "皮下脂肪量" to formatKg(measurement.subcutaneousFatKg)
+                            )
+                        )
 
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
                         // 肌肉与骨骼
-                        CategoryHeader("肌肉与骨骼")
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("骨骼肌量", formatKg(measurement.skeletalMuscleKg), modifier = Modifier.weight(1f))
-                            DetailGridItem("骨骼肌率", formatPct(measurement.skeletalMusclePct), modifier = Modifier.weight(1f))
-                            DetailGridItem("肌肉总量", formatKg(measurement.muscleKg), modifier = Modifier.weight(1f))
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("肌肉率", formatPct(measurement.musclePct), modifier = Modifier.weight(1f))
-                            DetailGridItem("骨量", formatKg(measurement.boneMassKg), modifier = Modifier.weight(1f))
-                            DetailGridItem("骨量占比", formatPct(measurement.boneMassPct), modifier = Modifier.weight(1f))
-                        }
+                        CategorySection(
+                            title = "肌肉与骨骼",
+                            items = listOf(
+                                "骨骼肌量" to formatKg(measurement.skeletalMuscleKg),
+                                "骨骼肌率" to formatPct(measurement.skeletalMusclePct),
+                                "肌肉总量" to formatKg(measurement.muscleKg),
+                                "肌肉率" to formatPct(measurement.musclePct),
+                                "骨量" to formatKg(measurement.boneMassKg),
+                                "骨量占比" to formatPct(measurement.boneMassPct)
+                            )
+                        )
 
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
                         // 水分与蛋白质
-                        CategoryHeader("水分与蛋白质")
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("水分率", formatPct(measurement.waterPct), modifier = Modifier.weight(1f))
-                            DetailGridItem("水分量", formatKg(measurement.waterKg), modifier = Modifier.weight(1f))
-                            DetailGridItem("蛋白质率", formatPct(measurement.proteinPct), modifier = Modifier.weight(1f))
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("蛋白质量", formatKg(measurement.proteinKg), modifier = Modifier.weight(1f))
-                            Spacer(modifier = Modifier.weight(1f))
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-
-                        // 代谢与体态
-                        CategoryHeader("代谢与身体状态")
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            DetailGridItem("基础代谢", if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()} kcal" else "--", modifier = Modifier.weight(1f))
-                            DetailGridItem("身体年龄", if (measurement.metabolicAge > 0) "${measurement.metabolicAge} 岁" else "--", modifier = Modifier.weight(1f))
-                            val impText = if (measurement.impedanceOhm > 0) "${measurement.impedanceOhm.toInt()} Ω" else "未测出"
-                            DetailGridItem("电阻抗", impText, modifier = Modifier.weight(1f))
-                        }
+                        CategorySection(
+                            title = "水分、蛋白与代谢",
+                            items = listOf(
+                                "水分率" to formatPct(measurement.waterPct),
+                                "水分量" to formatKg(measurement.waterKg),
+                                "蛋白质率" to formatPct(measurement.proteinPct),
+                                "蛋白质量" to formatKg(measurement.proteinKg),
+                                "基础代谢" to if (measurement.basalMetKcal > 0) "${measurement.basalMetKcal.toInt()} kcal" else "--",
+                                "身体年龄" to if (measurement.metabolicAge > 0) "${measurement.metabolicAge} 岁" else "--"
+                            )
+                        )
                     }
                 }
             }
@@ -246,32 +270,53 @@ fun MeasurementDetailScreen(
 }
 
 @Composable
-private fun CategoryHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(bottom = 6.dp)
-    )
-}
-
-private fun formatPct(value: Double): String {
-    return if (value > 0.0) String.format(Locale.getDefault(), "%.1f%%", value) else "--"
-}
-
-private fun formatKg(value: Double): String {
-    return if (value > 0.0) String.format(Locale.getDefault(), "%.2f kg", value) else "--"
+private fun CategorySection(title: String, items: List<Pair<String, String>>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        items.chunked(3).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                row.forEach { (label, value) ->
+                    DetailItemCard(label = label, value = value, modifier = Modifier.weight(1f))
+                }
+                repeat(3 - row.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
 }
 
 @Composable
-fun DetailGridItem(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
+private fun DetailItemCard(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier
     ) {
-        Text(text = label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(text = value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        }
     }
 }
+
+private fun trimNum(value: Double): String {
+    val rounded = Math.round(value * 10.0) / 10.0
+    return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+}
+
+private fun formatPct(value: Double): String = if (value > 0.0) "${trimNum(value)}%" else "--"
+
+private fun formatKg(value: Double): String = if (value > 0.0) "${trimNum(value)} kg" else "--"

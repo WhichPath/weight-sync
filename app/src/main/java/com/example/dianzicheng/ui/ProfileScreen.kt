@@ -1,40 +1,24 @@
 package com.example.dianzicheng.ui
 
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.health.connect.client.PermissionController
-import com.example.dianzicheng.data.local.AppLogger
+import com.example.dianzicheng.BuildConfig
 import com.example.dianzicheng.domain.Sex
 import com.example.dianzicheng.domain.UserProfile
+import com.example.dianzicheng.ui.components.GlassCard
 import com.example.dianzicheng.ui.garmin.GarminLoginDialog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -51,15 +35,12 @@ fun ProfileScreen(
     val isGarminLoggedIn by viewModel.isGarminLoggedIn.collectAsState()
     val garminUsername by viewModel.garminUsername.collectAsState()
     val garminAutoSync by viewModel.garminAutoSync.collectAsState()
-    val pairedMac by viewModel.pairedMac.collectAsState()
-    val pairedDeviceName by viewModel.pairedDeviceName.collectAsState()
     val healthConnectEnabled by viewModel.healthConnectEnabled.collectAsState()
     val isOperating by viewModel.isOperating.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showGarminLoginDialog by remember { mutableStateOf(false) }
-    var showUnpairConfirmDialog by remember { mutableStateOf(false) }
 
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
 
@@ -72,8 +53,9 @@ fun ProfileScreen(
 
     Scaffold(
         topBar = {
-            LargeTopAppBar(
-                title = { Text("我的与设置", fontWeight = FontWeight.Bold) }
+            TopAppBar(
+                title = { Text("设置与档案", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
         modifier = modifier
@@ -82,26 +64,27 @@ fun ProfileScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // ── 1. 个人身体档案 ──────────────────────────────────────────────
             item {
                 SectionHeader("个人身体档案")
-                Card(
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "档案用于准确计算 BMI、体脂率、肌肉量、骨量及基础代谢率",
+                            text = "档案用于准确计算 BMI、体脂率、骨量及基础代谢等参考指标",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        HorizontalDivider()
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -125,9 +108,10 @@ fun ProfileScreen(
                         }
                         Button(
                             onClick = { showEditProfileDialog = true },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(Icons.Default.Edit, contentDescription = null)
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("编辑身体档案")
                         }
@@ -137,10 +121,11 @@ fun ProfileScreen(
 
             // ── 2. Garmin Connect 同步 ──────────────────────────────────────
             item {
-                SectionHeader("Garmin Connect 同步 (国际区)")
-                Card(
+                SectionHeader("Garmin Connect 同步")
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -154,34 +139,40 @@ fun ProfileScreen(
                             Column {
                                 Text("登录状态", fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    text = if (isGarminLoggedIn) "已登录: ${garminUsername ?: "Garmin User"}" else "未登录",
+                                    text = if (isGarminLoggedIn) "已登录: ${garminUsername ?: "Garmin 用户"}" else "未登录",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (isGarminLoggedIn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                                 )
                             }
                             if (isGarminLoggedIn) {
-                                OutlinedButton(onClick = { viewModel.logoutGarmin() }) {
+                                OutlinedButton(
+                                    onClick = { viewModel.logoutGarmin() },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
                                     Text("退出登录")
                                 }
                             } else {
-                                Button(onClick = { showGarminLoginDialog = true }) {
-                                    Icon(Icons.Default.Login, contentDescription = null)
+                                Button(
+                                    onClick = { showGarminLoginDialog = true },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("网页登录")
+                                    Text("登录 Garmin")
                                 }
                             }
                         }
 
                         if (isGarminLoggedIn) {
-                            HorizontalDivider()
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("称重自动上传", fontWeight = FontWeight.SemiBold)
-                                    Text("每次锁定称重结果后自动后台上传至 Garmin", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("自动上传", fontWeight = FontWeight.SemiBold)
+                                    Text("捕获到新记录后自动上传至 Garmin", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 Switch(
                                     checked = garminAutoSync,
@@ -191,11 +182,12 @@ fun ProfileScreen(
                             FilledTonalButton(
                                 onClick = { viewModel.syncAllToGarmin() },
                                 modifier = Modifier.fillMaxWidth(),
-                                enabled = !isOperating
+                                enabled = !isOperating,
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Icon(Icons.Default.Sync, contentDescription = null)
+                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
-                                Text("一键同步所有历史记录至 Garmin")
+                                Text("一键同步所有未同步历史")
                             }
                         }
                     }
@@ -205,9 +197,10 @@ fun ProfileScreen(
             // ── 3. 安卓系统健康连接 ──────────────────────────────────────────
             item {
                 SectionHeader("系统健康连接 (Health Connect)")
-                Card(
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -220,7 +213,7 @@ fun ProfileScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("写入 Health Connect", fontWeight = FontWeight.SemiBold)
-                                Text("自动将体重与体脂率同步写入 Android 15 系统健康", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("自动将体重与体脂率写入 Android 系统健康", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(
                                 checked = healthConnectEnabled,
@@ -231,35 +224,49 @@ fun ProfileScreen(
                             FilledTonalButton(
                                 onClick = { viewModel.syncAllToHealthConnect() },
                                 modifier = Modifier.fillMaxWidth(),
-                                enabled = !isOperating
+                                enabled = !isOperating,
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("一键同步历史数据到系统健康")
+                                Text("一键同步历史到系统健康")
                             }
                         }
                     }
                 }
             }
 
-            // ── 4. 数据获取模式 ─────────────────────────────────────────
+            // ── 4. 关于与版本信息 ─────────────────────────────────────────
             item {
-                SectionHeader("数据获取模式")
-                Card(
+                SectionHeader("关于应用")
+                GlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("工作模式", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("无障碍 UI 自动化截获", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Text("应用版本", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                        Text(
-                            text = "无需配对电子秤，只需在阿福 App 测秤后打开身体指标详情页，即可自动提取 100% 官方计算指标并上传 Garmin。抓取排查日志已统合至首页【排查日志】。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("同步架构", style = MaterialTheme.typography.bodyMedium)
+                            Text("无障碍 UI 自动化解析 + Garmin Direct", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        }
                     }
                 }
             }
@@ -288,34 +295,16 @@ fun ProfileScreen(
             }
         )
     }
-
-    // ── 解除配对确认弹窗 ──────────────────────────────────────────────────────
-    if (showUnpairConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showUnpairConfirmDialog = false },
-            title = { Text("确认解绑体脂秤") },
-            text = { Text("解除绑定后，App 将重新开启扫描，您可以在配对页重新选择设备。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showUnpairConfirmDialog = false
-                    viewModel.resetPairing()
-                }) { Text("确认解绑", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showUnpairConfirmDialog = false }) { Text("取消") }
-            }
-        )
-    }
 }
 
 @Composable
 private fun SectionHeader(title: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.titleMedium,
+        style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(bottom = 8.dp)
+        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
     )
 }
 
@@ -333,7 +322,7 @@ private fun EditProfileDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("设置个人身体档案") },
+        title = { Text("设置个人身体档案", fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
