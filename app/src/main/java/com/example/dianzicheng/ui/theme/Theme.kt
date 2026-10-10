@@ -62,10 +62,13 @@ private val LightColorScheme = lightColorScheme(
     outlineVariant = OutlineVariantLight
 )
 
+/**
+ * 电子秤主题：默认采用确定性紫色与薄荷青绿双主色搭配，禁用系统壁纸自适应
+ */
 @Composable
 fun 电子秤Theme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false, // 确定性个性化配色，不随壁纸动态改变
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

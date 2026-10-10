@@ -380,7 +380,7 @@ private fun StatusPill(
 ) {
     Surface(
         shape = RoundedCornerShape(100.dp),
-        color = if (isActive) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+        color = if (isActive) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -390,14 +390,14 @@ private fun StatusPill(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (isActive) Color(0xFF2E7D32) else Color(0xFFD32F2F))
+                    .background(if (isActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error)
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = if (isActive) activeLabel else inactiveLabel,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = if (isActive) Color(0xFF2E7D32) else Color(0xFFD32F2F)
+                color = if (isActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
             )
         }
     }
@@ -490,15 +490,15 @@ private fun CapturedMeasurementCard(
                 if (measurement.syncedToGarmin) {
                     Surface(
                         shape = RoundedCornerShape(100.dp),
-                        color = Color(0xFFE8F5E9)
+                        color = MaterialTheme.colorScheme.secondaryContainer
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Garmin 已同步", color = Color(0xFF2E7D32), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                            Text("Garmin 已同步", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 } else {
@@ -539,7 +539,8 @@ private fun CapturedMeasurementCard(
                         Text(
                             text = String.format(Locale.getDefault(), "%.2f", measurement.weightKg),
                             style = MaterialTheme.typography.displayMedium,
-                            fontWeight = FontWeight.ExtraBold
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
                         )
                         Text("体重 (kg)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
                     }
@@ -556,7 +557,7 @@ private fun CapturedMeasurementCard(
                             text = "${trimNum(measurement.bodyFatPct)}%",
                             style = MaterialTheme.typography.displayMedium,
                             fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.secondary
                         )
                         Text("体脂率", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
                     }
@@ -848,12 +849,12 @@ private fun PermissionGuideSheetContent(
                 } else {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFE8F5E9),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = "✓ 电池无限制白名单已生效",
-                            color = Color(0xFF2E7D32),
+                            color = MaterialTheme.colorScheme.secondary,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
