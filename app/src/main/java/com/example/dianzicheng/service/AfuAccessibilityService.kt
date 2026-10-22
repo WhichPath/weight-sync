@@ -489,22 +489,21 @@ class AfuAccessibilityService : AccessibilityService() {
                 .setContentIntent(pendingIntent)
                 .build()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                )
+            // 前台服务类型说明：
+            // · 不能用 FOREGROUND_SERVICE_TYPE_HEALTH —— Android 14+ 要求同时持有
+            //   READ_HEALTH_DATA_IN_BACKGROUND 等权限，否则 startForeground 直接抛
+            //   SecurityException，保活会整体失效（这正是之前"经常掉线"的根因之一）。
+            // · 也不宜用 dataSync —— Android 15 起 dataSync 前台服务有 6 小时/24 小时的
+            //   硬性超时，超时后进程会被系统干掉，无障碍随即掉线。
+            // · 因此统一使用 specialUse（无超时），并在 Manifest 中声明子类型说明。
+            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             } else {
-                startForeground(NOTIFICATION_ID, notification)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             }
-            AppLogger.i(TAG, "已启动前台保活服务，无障碍权限锁定保护已生效")
+
+            startForeground(NOTIFICATION_ID, notification, serviceType)
+            AppLogger.i(TAG, "已启动前台保活服务（type=$serviceType），无障碍权限锁定保护已生效")
         } catch (e: Exception) {
             AppLogger.w(TAG, "启动前台服务保活异常: ${e.message}")
         }

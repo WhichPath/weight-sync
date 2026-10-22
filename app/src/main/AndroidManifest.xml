@@ -5,8 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 无障碍保活改用 specialUse 类型：无超时限制，避免 Android 15 dataSync 6 小时超时掉线 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Health Connect Permissions -->
@@ -18,6 +19,8 @@
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
         <package android:name="com.antgroup.aijk.android" />
+        <!-- Shizuku 特权通道（用于在应用内直接开关 / 重启无障碍服务） -->
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
     <application
@@ -64,7 +67,7 @@
             android:name=".service.AfuAccessibilityService"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:foregroundServiceType="health|dataSync"
+            android:foregroundServiceType="specialUse|dataSync"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -72,7 +75,21 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+            <!-- specialUse 前台服务的用途说明（Android 14+ 必需） -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="维持无障碍抓取服务的常驻运行，防止被系统清理后无障碍掉线" />
         </service>
+
+        <!-- Shizuku 特权通道 Provider：用于以 shell 身份改写 Secure Settings，
+             从而可以在 App 内直接开启 / 关闭 / 重启无障碍服务 -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 

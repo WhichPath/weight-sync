@@ -31,6 +31,12 @@
   - 目标架构 `compileSdk = 35`, `minSdk = 35`, `targetSdk = 35`；
   - 全面配置 Android 14+ / Android 15 标准 `android.intent.action.VIEW_PERMISSION_USAGE` 与 `android.permission.START_VIEW_PERMISSION_USAGE` Activity Alias，彻底修复在 ColorOS 等魔改系统上“健康权限呈灰色不可点击”的系统级限制；
   - 彻底移除小米健康等冗余依赖与服务。
+- ♿ **无障碍服务应用内可控（参考 GKD）**:
+  - 状态三态化：`未开启` / `已开启但未运行` / `运行中`，不再把“系统里滑块是开的”误判成“服务在跑”；
+  - 首页内置**无障碍开关**，配合可选的 Shizuku 特权通道，可在应用内直接开启 / 关闭 / 重启无障碍服务，无需跳转系统设置手动关开；
+  - App 被后台清理后首次打开会自动检测“开着但没跑”的异常态并尝试重新拉起；
+  - 前台保活改用 `specialUse` 类型，修复 Android 14+ 因缺少 `READ_HEALTH_DATA_IN_BACKGROUND` 权限导致 `startForeground` 抛 `SecurityException`（保活形同虚设）以及 Android 15 `dataSync` 6 小时超时掉线的问题；
+  - 内置「受限设置」自检与一键跳转应用信息页指引。
 
 ---
 

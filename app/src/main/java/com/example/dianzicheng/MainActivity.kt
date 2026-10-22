@@ -24,8 +24,9 @@ import com.example.dianzicheng.ui.MainScreen
 import com.example.dianzicheng.ui.ProfileViewModel
 import com.example.dianzicheng.ui.ScaleViewModel
 import com.example.dianzicheng.ui.theme.电子秤Theme
+import rikka.shizuku.Shizuku
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListener {
     private lateinit var database: AppDatabase
     private lateinit var scaleRepository: ScaleRepository
     private lateinit var preferenceManager: PreferenceManager
@@ -42,6 +43,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 监听 Shizuku 授权结果：授权后即可在应用内直接开关无障碍服务
+        runCatching { Shizuku.addRequestPermissionResultListener(this) }
 
         // 返回键优化：退回后台而不彻底销毁进程，避免被系统误杀及导致无障碍授权丢失
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -122,6 +126,18 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // 用户从系统设置或后台返回时自动刷新无障碍与后台保活状态
+        scaleViewModelRef?.refreshStatus()
+    }
+
+    override fun onDestroy() {
+        runCatching { Shizuku.removeRequestPermissionResultListener(this) }
+        super.onDestroy()
+    }
+
+    /**
+     * Shizuku 授权结果回调。
+     */
+    override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
         scaleViewModelRef?.refreshStatus()
     }
 }

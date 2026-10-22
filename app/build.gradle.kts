@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.dianzicheng"
         minSdk = 35
         targetSdk = 35
-        versionCode = 23
-        versionName = "2.0.12"
+        versionCode = 24
+        versionName = "2.0.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -63,6 +63,11 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.health.connect)
     implementation(libs.okhttp)
+
+    // 特权通道：借助 Shizuku 以 shell 身份改写 Secure Settings，
+    // 从而可以在 App 内直接开关 / 重启无障碍服务（与 GKD 相同的实现思路）。
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

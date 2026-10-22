@@ -30,6 +30,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dianzicheng.domain.BodyMeasurement
+import com.example.dianzicheng.service.AccessibilityController
+import com.example.dianzicheng.service.AccessibilityState
+import com.example.dianzicheng.service.PrivilegedChannel
 import com.example.dianzicheng.ui.components.GlassCard
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,6 +52,29 @@ fun DashboardScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshStatus()
+    }
+
+    // 统一处理 ViewModel 抛出的"需要 Activity 执行"的动作
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is ScaleUiEvent.Toast ->
+                    Toast.makeText(context, event.message, Toast.LENGTH_LONG).show()
+
+                ScaleUiEvent.OpenAccessibilityServiceSettings ->
+                    AccessibilityController.openServiceSettings(context)
+
+                ScaleUiEvent.OpenAppDetails -> {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                    }
+                    runCatching { context.startActivity(intent) }
+                }
+
+                ScaleUiEvent.RequestShizukuPermission ->
+                    viewModel.requestPrivilegedPermission()
+            }
+        }
     }
 
     Scaffold(
@@ -88,11 +114,11 @@ fun DashboardScreen(
             // 1. 无障碍服务核心控制卡片 (遵循 M3 Expressive 大圆角与层级规划)
             HeroServiceStatusCard(
                 uiState = uiState,
-                onOpenAccessibilitySettings = {
-                    try {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    } catch (_: Exception) {}
+                onAccessibilitySwitchChanged = { enabled ->
+                    viewModel.onAccessibilitySwitchChanged(enabled)
                 },
+                onRepairAccessibility = { viewModel.repairAccessibility() },
+                onRequestPrivilegedPermission = { viewModel.requestPrivilegedPermission() },
                 onRequestIgnoreBatteryOptimizations = {
                     try {
                         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -142,9 +168,7 @@ fun DashboardScreen(
                         }
                     },
                     onOpenSettings = {
-                        try {
-                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                        } catch (_: Exception) {}
+                        AccessibilityController.openServiceSettings(context)
                     }
                 )
             }
@@ -218,9 +242,17 @@ fun DashboardScreen(
                     } catch (_: Exception) {}
                 },
                 onOpenAccessibilitySettings = {
-                    try {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    } catch (_: Exception) {}
+                    AccessibilityController.openServiceSettings(context)
+                },
+                onOpenShizukuDownload = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://github.com/RikkaApps/Shizuku/releases")
+                            )
+                        )
+                    }
                 },
                 onRequestIgnoreBatteryOptimizations = {
                     try {
@@ -247,11 +279,14 @@ fun DashboardScreen(
 @Composable
 private fun HeroServiceStatusCard(
     uiState: ScaleUiState,
-    onOpenAccessibilitySettings: () -> Unit,
+    onAccessibilitySwitchChanged: (Boolean) -> Unit,
+    onRepairAccessibility: () -> Unit,
+    onRequestPrivilegedPermission: () -> Unit,
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onLaunchAfu: () -> Unit,
     onOpenGuide: () -> Unit
 ) {
+    val a11yState = uiState.accessibilityState
     GlassCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -269,11 +304,14 @@ private fun HeroServiceStatusCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 无障碍服务状态指示
+                // 无障碍服务状态指示（三态：运行中 / 已开启但没运行 / 未开启）
                 StatusPill(
-                    isActive = uiState.isAccessibilityEnabled,
+                    isActive = a11yState == AccessibilityState.RUNNING,
                     activeLabel = "监听运行中",
-                    inactiveLabel = "服务未就绪"
+                    inactiveLabel = when (a11yState) {
+                        AccessibilityState.ENABLED_NOT_RUNNING -> "已开启但未运行"
+                        else -> "服务未就绪"
+                    }
                 )
 
                 // 保活状态徽章
@@ -297,43 +335,100 @@ private fun HeroServiceStatusCard(
                 }
             }
 
+            // 应用内无障碍开关：可直接在应用内开启 / 关闭，无需跳转系统设置
+            AccessibilitySwitchRow(
+                state = a11yState,
+                busy = uiState.isAccessibilityBusy,
+                privilegedState = uiState.privilegedState,
+                onSwitchChanged = onAccessibilitySwitchChanged,
+                onRequestPrivilegedPermission = onRequestPrivilegedPermission
+            )
+
             // 描述提示语 (精简、克制)
             Text(
-                text = if (uiState.isAccessibilityEnabled) {
-                    "前台监听服务常驻保护中，在阿福中完成测秤即可自动抓取并同步。"
-                } else {
-                    "需要开启无障碍服务，以便在打开阿福身体成分弹窗时自动解析数据。"
+                text = when (a11yState) {
+                    AccessibilityState.RUNNING ->
+                        "前台监听服务常驻保护中，在阿福中完成测秤即可自动抓取并同步。"
+
+                    AccessibilityState.ENABLED_NOT_RUNNING ->
+                        "系统显示开关是开的，但服务其实没有在运行（多为后台清理或系统限制所致），点下方按钮即可重新拉起。"
+
+                    AccessibilityState.DISABLED ->
+                        "需要开启无障碍服务，以便在打开阿福身体成分弹窗时自动解析数据。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // 核心行动按钮：占据主导视觉空间，尺寸规范充裕
-            if (uiState.isAccessibilityEnabled) {
-                Button(
-                    onClick = onLaunchAfu,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
+            // 受限设置拦截提示（Android 13+ 侧载 APK 的典型坑）
+            if (uiState.isRestrictedBySystem) {
+                Surface(
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("打开阿福 App 测秤", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = "应用处于「受限设置」状态，系统会拒绝拉起无障碍服务。请到应用信息页右上角 ⋮ 允许受限制的设置。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
                 }
-            } else {
-                Button(
-                    onClick = onOpenAccessibilitySettings,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                ) {
-                    Icon(Icons.Default.Accessibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("前往开启无障碍服务", style = MaterialTheme.typography.labelLarge)
+            }
+
+            // 核心行动按钮：占据主导视觉空间，尺寸规范充裕
+            when (a11yState) {
+                AccessibilityState.RUNNING -> {
+                    Button(
+                        onClick = onLaunchAfu,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("打开阿福 App 测秤", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+
+                AccessibilityState.ENABLED_NOT_RUNNING -> {
+                    Button(
+                        onClick = onRepairAccessibility,
+                        enabled = !uiState.isAccessibilityBusy,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (uiState.isAccessibilityBusy) "正在重新拉起..." else "一键重启无障碍服务",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+
+                AccessibilityState.DISABLED -> {
+                    Button(
+                        onClick = { onAccessibilitySwitchChanged(true) },
+                        enabled = !uiState.isAccessibilityBusy,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.Accessibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (uiState.isAccessibilityBusy) "正在开启..." else "开启无障碍服务",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
                 }
             }
 
@@ -399,6 +494,110 @@ private fun StatusPill(
                 fontWeight = FontWeight.Bold,
                 color = if (isActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
             )
+        }
+    }
+}
+
+/**
+ * 应用内无障碍开关行。
+ *
+ * 参照 GKD 的交互：开关直接在应用内生效（有 Shizuku 特权通道时静默改写系统设置），
+ * 没有特权通道时退化为跳到"本服务"的系统设置详情页。
+ */
+@Composable
+private fun AccessibilitySwitchRow(
+    state: AccessibilityState,
+    busy: Boolean,
+    privilegedState: PrivilegedChannel.State,
+    onSwitchChanged: (Boolean) -> Unit,
+    onRequestPrivilegedPermission: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "无障碍服务",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = when (state) {
+                            AccessibilityState.RUNNING -> "服务已连接，正在监听阿福数据"
+                            AccessibilityState.ENABLED_NOT_RUNNING -> "开关是开的，但服务没有真正运行"
+                            AccessibilityState.DISABLED -> "关闭状态，无法抓取阿福数据"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = state != AccessibilityState.DISABLED,
+                    onCheckedChange = { onSwitchChanged(it) },
+                    enabled = !busy
+                )
+            }
+
+            // 特权通道状态：决定能否在应用内直接开关 / 重启
+            val (channelText, channelClickable) = when (privilegedState) {
+                PrivilegedChannel.State.READY ->
+                    "应用内可直接开关（Shizuku 已就绪）" to false
+
+                PrivilegedChannel.State.NEED_PERMISSION ->
+                    "授权 Shizuku 后可在应用内一键开关" to true
+
+                PrivilegedChannel.State.UNAVAILABLE ->
+                    "未接入特权通道，开关将跳转系统设置" to false
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (channelClickable) {
+                            Modifier.clickable { onRequestPrivilegedPermission() }
+                        } else {
+                            Modifier
+                        }
+                    ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (privilegedState == PrivilegedChannel.State.READY) {
+                        Icons.Default.Bolt
+                    } else {
+                        Icons.Default.LockOpen
+                    },
+                    contentDescription = null,
+                    tint = if (privilegedState == PrivilegedChannel.State.READY) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = channelText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (privilegedState == PrivilegedChannel.State.READY) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
         }
     }
 }
@@ -727,6 +926,7 @@ private fun PermissionGuideSheetContent(
     isBatteryIgnored: Boolean,
     onOpenAppDetails: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenShizukuDownload: () -> Unit,
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -798,7 +998,10 @@ private fun PermissionGuideSheetContent(
                     Text("2. 开启无障碍监听", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                 }
                 Text(
-                    text = "在已下载的应用 / 无障碍列表中找到『阿福数据自动提取服务』并开启开关。",
+                    text = "推荐直接在应用内打开首页的「无障碍服务」开关：\n" +
+                            "• 已授权 Shizuku 时，开关会在应用内静默生效，无需跳转；\n" +
+                            "• 未授权时，开关会直达本服务在系统设置里的详情页，拨一次即可。\n" +
+                            "若列表里找不到本服务，可手动在『已下载的应用 / 无障碍』中找到『阿福数据自动提取服务』开启。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -809,7 +1012,21 @@ private fun PermissionGuideSheetContent(
                 ) {
                     Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("前往系统无障碍设置")
+                    Text("直达系统无障碍设置")
+                }
+                Text(
+                    text = "可选增强：安装 Shizuku 并授权本应用后，无障碍开关 / 掉线重启都能在应用内一键完成（与 GKD 同款体验）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(
+                    onClick = onOpenShizukuDownload,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("获取 Shizuku")
                 }
             }
         }
