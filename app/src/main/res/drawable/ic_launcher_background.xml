@@ -1,35 +1,44 @@
-<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 渐变背景层：深邃健康科技蓝紫底色 -->
     <path android:pathData="M0,0h108v108h-108z">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:endX="108"
-                android:endY="108"
+                android:type="linear"
                 android:startX="0"
                 android:startY="0"
-                android:type="linear">
-                <item android:color="#0B132B" android:offset="0.0" />
-                <item android:color="#1C2541" android:offset="0.5" />
-                <item android:color="#1F3A60" android:offset="1.0" />
+                android:endX="38"
+                android:endY="108">
+                <item android:offset="0" android:color="#00A88E"/>
+                <item android:offset="1" android:color="#00796B"/>
             </gradient>
         </aapt:attr>
     </path>
-
-    <!-- 柔和的科技微光弧线与光晕 -->
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M54,14 A40,40 0 0 1 94,54"
-        android:strokeWidth="1.2"
-        android:strokeColor="#1A38BDF8" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M14,54 A40,40 0 0 1 54,94"
-        android:strokeWidth="1.2"
-        android:strokeColor="#1A38BDF8" />
+    <path android:pathData="M-20,-20h148v148h-148z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="32"
+                android:centerY="26"
+                android:gradientRadius="49">
+                <item android:offset="0" android:color="#5EEAD4" android:alpha="0.42"/>
+                <item android:offset="1" android:color="#5EEAD4" android:alpha="0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M-20,-20h148v148h-148z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="84"
+                android:centerY="91"
+                android:gradientRadius="54">
+                <item android:offset="0" android:color="#00443C" android:alpha="0.45"/>
+                <item android:offset="1" android:color="#00443C" android:alpha="0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
 </vector>

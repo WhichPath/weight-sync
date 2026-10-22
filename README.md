@@ -42,7 +42,20 @@
 
 ## 🏗️ 架构与编译
 
-本项目推荐直接通过 **GitHub Actions** 进行云端无污染自动化编译生成 APK。
+本项目采用**本地编译**（不再使用 GitHub Actions 云端构建）。
 
-### 云端编译 (GitHub Actions)
-代码推送至 `main` 分支或在 GitHub Actions 页面点击 `Run workflow` 后，CI 会自动启动 JDK 17 环境执行 `./gradlew assembleDebug`，并生成 `weight-sync-debug-apk` 构件供随时下载安装。
+### 本地编译
+本地 Android 工具链位于 `/home/beta/BigCangku/Android/`（SDK + 模拟器 + `Pixel_8_API_35` AVD），
+在工作区根目录执行：
+
+```bash
+export ANDROID_HOME=/home/beta/BigCangku/Android/sdk
+./gradlew test            # 解析器回归用例
+./gradlew assembleRelease # 产出已签名的 Release APK
+```
+
+产物位于 `app/build/outputs/apk/release/app-release.apk`，并按 `output_apk/app-v{version}-release.apk` 归档。
+
+### 图标
+应用图标为自适应图标（108×108 视口）：主题绿渐变背景 + 蚂蚁阿福轮廓 + Health Connect 官方蓝药丸形 +
+Garmin 官方三角作同步箭头 + 白色同步弧，并提供 Android 13+ 主题图标单色层。

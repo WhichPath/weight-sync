@@ -20,9 +20,30 @@
   - 项目日常编译与发布**直接产出 Release 版本**（`./gradlew assembleRelease`），**不需要**编译 Debug 版本。
   - `app/build.gradle.kts` 的 `buildTypes.release` 配置必须包含 `signingConfig = signingConfigs.getByName("debug")`（或专有签名），确保编译出的 Release APK 带有签名，可直接在真实设备（Android 15+ / ColorOS）上安装运行。
   - 禁止在仓库中硬编码任何私有私钥/敏感 Token。
-- **云端构建**：
-  - 依赖 GitHub Actions 进行自动化编译（`.github/workflows/build-apk.yml`）。
-  - 触发构建后通过 `gh run watch` 等待完成并下载产物。
+- **本地编译（唯一方式，不再使用 GitHub Actions）**：
+  - **自 2.0.14 起，所有编译都在本地完成，不再触发 GitHub Actions 云端构建**；
+    `.github/workflows/build-apk.yml` 保留但不再使用，Agent **不得**再执行 `git push` 触发云端编译或用 `gh run watch` 等待云端产物。
+  - 本地 Android 工具链统一位于 **`/home/beta/BigCangku/Android/`**：
+    ```
+    /home/beta/BigCangku/Android/sdk/          # Android SDK（platform-tools / build-tools / platforms）
+    /home/beta/BigCangku/Android/sdk/emulator/emulator   # 模拟器
+    /home/beta/BigCangku/Android/avd/          # AVD（Pixel_8_API_35，Android 15 / google_apis）
+    ```
+  - 环境变量：`ANDROID_HOME=/home/beta/BigCangku/Android/sdk`，`adb` 位于 `$ANDROID_HOME/platform-tools`。
+  - 标准编译命令（在工作区根目录执行）：
+    ```
+    ./gradlew test            # 回归测试（解析器用例）
+    ./gradlew assembleRelease # 产出 Release APK
+    ```
+  - 产物路径：`app/build/outputs/apk/release/app-release.apk`，编译完成后按第 3 节规范归档到 `output_apk/`。
+- **模拟器（本地可视化验证）**：
+  - 启动命令（带图形界面，配合本机 `DISPLAY=:0`）：
+    ```
+    $ANDROID_HOME/emulator/emulator -avd Pixel_8_API_35 -no-audio -no-boot-anim -no-snapshot
+    ```
+  - 用途：验证应用图标在真实启动器中的呈现、UI 布局与无障碍弹窗交互。
+  - 注意：若模拟器启动后卡在 "detected a hanging thread 'QEMU2 ...'"（容器内 QEMU 线程调度受限），
+    属于环境限制而非工程问题；此时改用「矢量化渲染自检」的方式验证图标（见第 6 节）。
 
 ---
 
@@ -32,11 +53,11 @@
   - 本地统一存放在工作区根目录的 `output_apk/` 文件夹中。
   - 该目录必须在 `.gitignore` 中忽略，不得提交至 Git。
 - **文件命名规则**：
-  - 下载后的 APK 必须按当前版本号重命名为：
+  - 编译产出的 APK 必须按当前版本号重命名为：
     ```
     output_apk/app-v{versionName}-release.apk
     ```
-    （例如：`app-v1.0.1-release.apk`）
+    （例如：`app-v2.0.14-release.apk`）
   - 同时复制/生成一份别名文件，方便直接快速安装：
     ```
     output_apk/app-release.apk
@@ -66,3 +87,19 @@
   - **严禁盲目复制**不适用的逻辑（例如误把纯 GATT 秤当作蓝牙广播秤），杜绝幽灵连接与异常读数。
 - **权限规范**：
   - 针对 Android 12+ / 15+，蓝牙扫描使用 `BLUETOOTH_SCAN` 并配置 `usesPermissionFlags="neverForLocation"`，杜绝不必要的定位权限索取。
+
+---
+
+## 6. 应用图标与视觉资源规范
+
+- **自适应图标三层结构**（`app/src/main/res/`）：
+  - `mipmap-anydpi-v26/ic_launcher.xml` → `drawable/ic_launcher_background.xml`（背景层）+ `drawable/ic_launcher_foreground.xml`（前景层）+ `drawable/ic_launcher_monochrome.xml`（主题图标单色层）。
+  - 三层统一使用 **108×108 视口**，安全区为中心 **66×66**；允许元素出血（溢出裁切）以增强动感。
+- **当前设计（2.0.14）**：主题绿渐变背景 + 蚂蚁阿福轮廓（白色）+ Health Connect 官方蓝药丸形 + Garmin 官方三角作同步箭头 + 白色同步弧。
+- **矢量化自检流程（改图标后必须执行）**：
+  1. 用脚本把品牌位图描摹为 SVG path（contour + Douglas-Peucker + Catmull-Rom 平滑），保留矢量；
+  2. 由同一份参数同时产出 **SVG 预览** 与 **Android VectorDrawable XML**，保证"所见即将打包"；
+  3. 把 VectorDrawable 反解为 SVG 渲染成 PNG（`rsvg-convert`），套用圆形遮罩模拟启动器裁切后**由 Agent 自行目视评估并迭代**；
+  4. 重点核查 VectorDrawable 陷阱：未声明 `android:fillColor` 的 `<path>` 在 Android 中**默认填充黑色**，
+     纯描边路径必须显式写 `android:fillColor="#00000000"`。
+- **传统 PNG 兜底**：`mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher(.round).png` 需同步重新生成。
