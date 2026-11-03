@@ -3,11 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- 无障碍保活改用 specialUse 类型：无超时限制，避免 Android 15 dataSync 6 小时超时掉线 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 一次性永久授权：通过 Shizuku / ADB 授予后，应用内可直接改写 Secure Settings。
+         该权限是 development 级权限，授予后重启手机 / 关闭开发者选项仍然有效。 -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Health Connect Permissions -->
@@ -24,6 +24,7 @@
     </queries>
 
     <application
+        android:name=".WeightSyncApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -62,12 +63,13 @@
             </intent-filter>
         </activity-alias>
 
-        <!-- 阿福健康 UI 无障碍抓取服务 -->
+        <!-- 阿福健康 UI 无障碍抓取服务。
+             注意：不再声明 foregroundServiceType，也不启动前台服务 / 常驻通知。
+             无障碍服务由系统绑定托管；掉线时由应用自检或快捷开关重新拉起。 -->
         <service
-            android:name=".service.AfuAccessibilityService"
+            android:name=".accessibility.AfuAccessibilityService"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:foregroundServiceType="specialUse|dataSync"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -75,10 +77,18 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
-            <!-- specialUse 前台服务的用途说明（Android 14+ 必需） -->
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="维持无障碍抓取服务的常驻运行，防止被系统清理后无障碍掉线" />
+        </service>
+
+        <!-- 可选的“通知栏快捷开关”，替代常驻通知实现无感保活 -->
+        <service
+            android:name=".accessibility.AfuTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
         </service>
 
         <!-- Shizuku 特权通道 Provider：用于以 shell 身份改写 Secure Settings，

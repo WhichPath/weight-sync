@@ -1,23 +1,11 @@
-package com.example.dianzicheng.service
+package com.example.dianzicheng.accessibility
 
 import android.accessibilityservice.AccessibilityService
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Context
-import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
-import androidx.core.app.NotificationCompat
-import com.example.dianzicheng.MainActivity
-import com.example.dianzicheng.R
-import com.example.dianzicheng.data.local.AppDatabase
-import com.example.dianzicheng.data.local.AppLogger
-import com.example.dianzicheng.data.local.PreferenceManager
-import com.example.dianzicheng.data.repository.ScaleRepository
+import com.example.dianzicheng.WeightSyncApp
+import com.example.dianzicheng.core.logging.AppLogger
 import com.example.dianzicheng.domain.BodyMeasurement
 import com.example.dianzicheng.domain.UserProfile
 import kotlinx.coroutines.CoroutineScope
@@ -35,12 +23,11 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
 private const val TAG = "AfuAccessibilityService"
 private const val AFU_PACKAGE = "com.antgroup.aijk.android"
-private const val NOTIFICATION_CHANNEL_ID = "afu_accessibility_keepalive"
-private const val NOTIFICATION_ID = 1001
 
 /** 详情弹窗关闭判定：静默超过该时长即认为弹窗已关闭（避免 Toast 等零散窗口误判） */
 private const val SHEET_TIMEOUT_MS = 8_000L
@@ -61,10 +48,13 @@ class AfuAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private lateinit var database: AppDatabase
-    private lateinit var scaleRepository: ScaleRepository
-    private lateinit var preferenceManager: PreferenceManager
+    /** 由 Application 统一装配，Service 不再自行创建数据库 / 仓库 / 偏好实例。 */
+    private val container get() = (application as WeightSyncApp).container
+
     private val saveMutex = Mutex()
+
+    /** 当前实例是否已经计入 [activeInstances]，避免 onUnbind / onDestroy 重复扣减。 */
+    private var connected = false
 
     // ── 会话状态（一次弹窗打开 = 一个会话） ──
     private var sessionKey: String? = null
@@ -77,6 +67,13 @@ class AfuAccessibilityService : AccessibilityService() {
     private var toastShown = false
 
     companion object {
+        /**
+         * 系统在重绑定时可能先回调新实例的 onServiceConnected，再回调旧实例的 onDestroy。
+         * 单纯用 Boolean 会被旧实例的 onDestroy 错误地覆盖成 false，因此这里用实例计数，
+         * 只有所有实例都断开时才认为服务未运行。
+         */
+        private val activeInstances = AtomicInteger(0)
+
         private val _isServiceActive = MutableStateFlow(false)
         val isServiceActive: StateFlow<Boolean> = _isServiceActive.asStateFlow()
 
@@ -95,16 +92,30 @@ class AfuAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (!connected) {
+            connected = true
+            activeInstances.incrementAndGet()
+        }
         _isServiceActive.value = true
-        database = AppDatabase.getInstance(applicationContext)
-        scaleRepository = ScaleRepository(database.scaleDao())
-        preferenceManager = PreferenceManager(applicationContext)
+        AppLogger.i(TAG, "onServiceConnected activeInstances=${activeInstances.get()}")
 
-        // 启动前台服务常驻通知，锁定进程优先级，彻底防止退出后被 ColorOS/系统撤销无障碍权限
-        startForegroundKeepAlive()
-
-        AppLogger.i(TAG, "阿福无障碍服务已启动连接（前台保活模式已激活）")
+        // 不再启动前台服务 / 常驻通知：无障碍服务本身由系统绑定和托管，
+        // 掉线时由 App 启动自检或通知栏快捷开关（可选）重新拉起即可。
+        AppLogger.i(TAG, "阿福无障碍服务已连接（系统托管，无前台通知）")
         _lastScrapeLog.value = "无障碍服务已激活，请在阿福点击【测量详情】"
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        markDisconnected()
+        return super.onUnbind(intent)
+    }
+
+    private fun markDisconnected() {
+        if (!connected) return
+        connected = false
+        val remaining = activeInstances.decrementAndGet().coerceAtLeast(0)
+        _isServiceActive.value = remaining > 0
+        AppLogger.i(TAG, "markDisconnected activeInstances=$remaining")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -183,10 +194,10 @@ class AfuAccessibilityService : AccessibilityService() {
                     return@withLock
                 }
 
-                val profile = preferenceManager.userProfile.first() ?: UserProfile()
+                val profile = container.preferenceManager.userProfile.first() ?: UserProfile()
                 val measurement = AfuUiParser.buildMeasurement(weight, epoch, sessionMetrics, profile)
 
-                val allHistory = scaleRepository.getAllMeasurements()
+                val allHistory = container.scaleRepository.getAllMeasurements()
 
                 // 同一分钟内、体重一致 => 认为是同一条记录，用同一主键覆盖更新，避免滚动过程产生多条记录
                 val existing = allHistory.firstOrNull {
@@ -209,7 +220,7 @@ class AfuAccessibilityService : AccessibilityService() {
                 }
 
                 val toSave = if (existing != null) measurement.copy(id = existing.id) else measurement
-                val saved = scaleRepository.saveMeasurement(toSave)
+                val saved = container.scaleRepository.saveMeasurement(toSave)
                 if (saved == null) {
                     publishLog(stamp, sheetTexts, snapshot, "数据无效（体重 < 10kg），已忽略")
                     return@withLock
@@ -221,8 +232,6 @@ class AfuAccessibilityService : AccessibilityService() {
                 _lastScrapeLog.value = "已从详情面板截获: ${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}% " +
                         "(共 $totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项，待确认上传)"
                 publishLog(stamp, sheetTexts, snapshot, null)
-
-                updateKeepAliveNotification("最新截获：${saved.weightKg}kg / 体脂 ${saved.bodyFatPct}%（$totalFields/${AfuUiParser.TOTAL_FIELD_COUNT} 项）")
 
                 if (!toastShown) {
                     toastShown = true
@@ -455,105 +464,15 @@ class AfuAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startForegroundKeepAlive() {
-        try {
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
-                val channel = NotificationChannel(
-                    NOTIFICATION_CHANNEL_ID,
-                    "阿福数据监听与保活服务",
-                    NotificationManager.IMPORTANCE_LOW
-                ).apply {
-                    description = "保持后台持续监听阿福体脂数据，防止退出后无障碍权限被系统撤销"
-                    setShowBadge(false)
-                }
-                notificationManager.createNotificationChannel(channel)
-            }
-
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("阿福体脂同步运行中")
-                .setContentText("后台持续监听测量数据（无障碍权限常驻保护）")
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .setContentIntent(pendingIntent)
-                .build()
-
-            // 前台服务类型说明：
-            // · 不能用 FOREGROUND_SERVICE_TYPE_HEALTH —— Android 14+ 要求同时持有
-            //   READ_HEALTH_DATA_IN_BACKGROUND 等权限，否则 startForeground 直接抛
-            //   SecurityException，保活会整体失效（这正是之前"经常掉线"的根因之一）。
-            // · 也不宜用 dataSync —— Android 15 起 dataSync 前台服务有 6 小时/24 小时的
-            //   硬性超时，超时后进程会被系统干掉，无障碍随即掉线。
-            // · 因此统一使用 specialUse（无超时），并在 Manifest 中声明子类型说明。
-            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            }
-
-            startForeground(NOTIFICATION_ID, notification, serviceType)
-            AppLogger.i(TAG, "已启动前台保活服务（type=$serviceType），无障碍权限锁定保护已生效")
-        } catch (e: Exception) {
-            AppLogger.w(TAG, "启动前台服务保活异常: ${e.message}")
-        }
-    }
-
-    private fun updateKeepAliveNotification(text: String) {
-        try {
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("阿福体脂同步运行中")
-                .setContentText(text)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .setContentIntent(pendingIntent)
-                .build()
-
-            notificationManager.notify(NOTIFICATION_ID, notification)
-        } catch (e: Exception) {
-            // ignore
-        }
-    }
-
     override fun onInterrupt() {
-        AppLogger.w(TAG, "阿福无障碍服务被中断")
-        _isServiceActive.value = false
+        // onInterrupt 只表示系统暂时打断反馈，不代表服务已经断开；
+        // 运行状态以 onServiceConnected / onUnbind / onDestroy 的实例计数为准。
+        AppLogger.w(TAG, "阿福无障碍服务被中断（连接状态保持不变）")
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        _isServiceActive.value = false
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-            }
-        } catch (_: Exception) {
-        }
+        markDisconnected()
         serviceScope.cancel()
     }
 }

@@ -2,6 +2,7 @@ package com.example.dianzicheng.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.dianzicheng.core.logging.AppLogger
 import com.example.dianzicheng.data.garmin.GarminSyncService
 import com.example.dianzicheng.data.health.HealthConnectManager
 import com.example.dianzicheng.data.local.PreferenceManager
@@ -22,9 +23,9 @@ import kotlinx.coroutines.launch
  */
 class HistoryViewModel(
     private val repository: ScaleRepository,
-    private val garminSyncService: GarminSyncService? = null,
-    private val preferenceManager: PreferenceManager? = null,
-    private val healthConnectManager: HealthConnectManager? = null
+    private val garminSyncService: GarminSyncService,
+    private val preferenceManager: PreferenceManager,
+    private val healthConnectManager: HealthConnectManager
 ) : ViewModel() {
 
     val history: StateFlow<List<BodyMeasurement>> = repository.getHistory()
@@ -38,10 +39,9 @@ class HistoryViewModel(
     }
 
     fun syncToGarmin(measurement: BodyMeasurement) {
-        val service = garminSyncService ?: return
         viewModelScope.launch {
             _syncMessage.value = "正在上传至 Garmin..."
-            val result = service.uploadMeasurement(measurement)
+            val result = garminSyncService.uploadMeasurement(measurement)
             if (result.isSuccess) {
                 _syncMessage.value = "Garmin 同步成功"
             } else {
@@ -53,14 +53,14 @@ class HistoryViewModel(
     fun deleteMeasurement(measurement: BodyMeasurement) {
         viewModelScope.launch {
             repository.deleteMeasurement(measurement)
-            val prefs = preferenceManager ?: return@launch
-            val hc = healthConnectManager ?: return@launch
             try {
-                if (prefs.healthConnectEnabled.first() && hc.hasAllPermissions()) {
-                    hc.deleteMeasurement(measurement)
+                if (preferenceManager.healthConnectEnabled.first() &&
+                    healthConnectManager.hasAllPermissions()
+                ) {
+                    healthConnectManager.deleteMeasurement(measurement)
                 }
             } catch (e: Exception) {
-                android.util.Log.e("HistoryViewModel", "Health Connect delete sync failed", e)
+                AppLogger.e("HistoryViewModel", "Health Connect 删除同步失败: ${e.message}")
             }
         }
     }

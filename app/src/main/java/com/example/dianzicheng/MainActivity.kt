@@ -1,24 +1,13 @@
 package com.example.dianzicheng
 
-import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.dianzicheng.data.garmin.GarminAuthManager
-import com.example.dianzicheng.data.garmin.GarminSyncService
-import com.example.dianzicheng.data.health.HealthConnectManager
-import com.example.dianzicheng.data.local.AppDatabase
-import com.example.dianzicheng.data.local.PreferenceManager
-import com.example.dianzicheng.data.repository.ScaleRepository
+import com.example.dianzicheng.accessibility.PrivilegedAccess
 import com.example.dianzicheng.ui.HistoryViewModel
 import com.example.dianzicheng.ui.MainScreen
 import com.example.dianzicheng.ui.ProfileViewModel
@@ -27,92 +16,35 @@ import com.example.dianzicheng.ui.theme.电子秤Theme
 import rikka.shizuku.Shizuku
 
 class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListener {
-    private lateinit var database: AppDatabase
-    private lateinit var scaleRepository: ScaleRepository
-    private lateinit var preferenceManager: PreferenceManager
-    private lateinit var healthConnectManager: HealthConnectManager
-    private lateinit var garminAuthManager: GarminAuthManager
-    private lateinit var garminSyncService: GarminSyncService
-    private var scaleViewModelRef: ScaleViewModel? = null
 
-    private val requestNotificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        // 通知权限结果，不强制
-    }
+    private val container get() = (application as WeightSyncApp).container
+
+    private var scaleViewModelRef: ScaleViewModel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 监听 Shizuku 授权结果：授权后即可在应用内直接开关无障碍服务
+        // 监听 Shizuku 授权结果：授权后自动继续一次性永久授权流程
         runCatching { Shizuku.addRequestPermissionResultListener(this) }
 
-        // 返回键优化：退回后台而不彻底销毁进程，避免被系统误杀及导致无障碍授权丢失
+        // 返回键优化：退回后台而不彻底销毁进程，避免刚授权完就回到桌面
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 moveTaskToBack(true)
             }
         })
 
-        // 请求 Android 13+ 通知权限（用于前台保活与抓取结果提示）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-
-        database = AppDatabase.getInstance(applicationContext)
-        preferenceManager = PreferenceManager(applicationContext)
-        scaleRepository = ScaleRepository(database.scaleDao())
-        garminAuthManager = GarminAuthManager(applicationContext, preferenceManager)
-        garminSyncService = GarminSyncService(applicationContext, garminAuthManager, database.scaleDao())
-        healthConnectManager = HealthConnectManager(applicationContext)
-
         enableEdgeToEdge()
         setContent {
             电子秤Theme {
-                val scaleViewModel: ScaleViewModel = viewModel(
-                    factory = object : ViewModelProvider.Factory {
-                        @Suppress("UNCHECKED_CAST")
-                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                            return ScaleViewModel(
-                                context = applicationContext,
-                                repository = scaleRepository,
-                                preferenceManager = preferenceManager,
-                                healthConnectManager = healthConnectManager,
-                                garminSyncService = garminSyncService
-                            ) as T
-                        }
-                    }
-                )
+                val scaleViewModel: ScaleViewModel =
+                    viewModel(factory = container.scaleViewModelFactory())
+                val historyViewModel: HistoryViewModel =
+                    viewModel(factory = container.historyViewModelFactory())
+                val profileViewModel: ProfileViewModel =
+                    viewModel(factory = container.profileViewModelFactory())
+
                 scaleViewModelRef = scaleViewModel
-                val historyViewModel: HistoryViewModel = viewModel(
-                    factory = object : ViewModelProvider.Factory {
-                        @Suppress("UNCHECKED_CAST")
-                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                            return HistoryViewModel(
-                                repository = scaleRepository,
-                                garminSyncService = garminSyncService,
-                                preferenceManager = preferenceManager,
-                                healthConnectManager = healthConnectManager
-                            ) as T
-                        }
-                    }
-                )
-                val profileViewModel: ProfileViewModel = viewModel(
-                    factory = object : ViewModelProvider.Factory {
-                        @Suppress("UNCHECKED_CAST")
-                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                            return ProfileViewModel(
-                                preferenceManager = preferenceManager,
-                                scaleRepository = scaleRepository,
-                                garminAuthManager = garminAuthManager,
-                                garminSyncService = garminSyncService,
-                                healthConnectManager = healthConnectManager
-                            ) as T
-                        }
-                    }
-                )
 
                 MainScreen(
                     scaleViewModel = scaleViewModel,
@@ -125,8 +57,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
 
     override fun onResume() {
         super.onResume()
-        // 用户从系统设置或后台返回时自动刷新无障碍与后台保活状态
-        scaleViewModelRef?.refreshStatus()
+        // 用户从系统设置或后台返回时自动刷新状态，并尝试修复掉线服务
+        scaleViewModelRef?.onAppResumed()
     }
 
     override fun onDestroy() {
@@ -134,10 +66,10 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
         super.onDestroy()
     }
 
-    /**
-     * Shizuku 授权结果回调。
-     */
     override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
-        scaleViewModelRef?.refreshStatus()
+        if (requestCode != PrivilegedAccess.REQUEST_CODE) return
+        scaleViewModelRef?.onShizukuPermissionResult(
+            grantResult == PackageManager.PERMISSION_GRANTED
+        )
     }
 }

@@ -14,8 +14,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,10 +32,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.dianzicheng.accessibility.AccessibilityState
+import com.example.dianzicheng.accessibility.AccessibilitySystem
+import com.example.dianzicheng.accessibility.PrivilegeMode
+import com.example.dianzicheng.accessibility.PrivilegeStatus
+import com.example.dianzicheng.accessibility.PrivilegedAccess
+import com.example.dianzicheng.accessibility.ShizukuState
 import com.example.dianzicheng.domain.BodyMeasurement
-import com.example.dianzicheng.service.AccessibilityController
-import com.example.dianzicheng.service.AccessibilityState
-import com.example.dianzicheng.service.PrivilegedChannel
 import com.example.dianzicheng.ui.components.GlassCard
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,6 +55,32 @@ fun DashboardScreen(
     val context = LocalContext.current
     var showInspectionDialog by remember { mutableStateOf(false) }
     var showGuideSheet by remember { mutableStateOf(false) }
+    var showPrivilegeSheet by remember { mutableStateOf(false) }
+    val adbCommand = remember { PrivilegedAccess.adbProvisionCommand(context) }
+
+    val openAfu = {
+        val launchIntent = context.packageManager
+            .getLaunchIntentForPackage("com.antgroup.aijk.android")
+        if (launchIntent != null) {
+            context.startActivity(launchIntent)
+        } else {
+            Toast.makeText(context, "未找到阿福 App，请确认已安装", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val requestIgnoreBatteryOptimizations = {
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshStatus()
@@ -62,17 +94,13 @@ fun DashboardScreen(
                     Toast.makeText(context, event.message, Toast.LENGTH_LONG).show()
 
                 ScaleUiEvent.OpenAccessibilityServiceSettings ->
-                    AccessibilityController.openServiceSettings(context)
+                    AccessibilitySystem.openServiceSettings(context)
 
-                ScaleUiEvent.OpenAppDetails -> {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.fromParts("package", context.packageName, null)
-                    }
-                    runCatching { context.startActivity(intent) }
-                }
+                ScaleUiEvent.OpenAppDetails ->
+                    AccessibilitySystem.openAppDetails(context)
 
-                ScaleUiEvent.RequestShizukuPermission ->
-                    viewModel.requestPrivilegedPermission()
+                ScaleUiEvent.ShowPrivilegeDialog ->
+                    showPrivilegeSheet = true
             }
         }
     }
@@ -95,7 +123,7 @@ fun DashboardScreen(
                         Icon(Icons.Default.Terminal, contentDescription = "排查日志")
                     }
                     IconButton(onClick = { showGuideSheet = true }) {
-                        Icon(Icons.Default.HelpOutline, contentDescription = "权限向导")
+                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "权限向导")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -118,27 +146,10 @@ fun DashboardScreen(
                     viewModel.onAccessibilitySwitchChanged(enabled)
                 },
                 onRepairAccessibility = { viewModel.repairAccessibility() },
-                onRequestPrivilegedPermission = { viewModel.requestPrivilegedPermission() },
-                onRequestIgnoreBatteryOptimizations = {
-                    try {
-                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = Uri.parse("package:${context.packageName}")
-                        }
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        try {
-                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                        } catch (_: Exception) {}
-                    }
-                },
-                onLaunchAfu = {
-                    val launchIntent = context.packageManager.getLaunchIntentForPackage("com.antgroup.aijk.android")
-                    if (launchIntent != null) {
-                        context.startActivity(launchIntent)
-                    } else {
-                        Toast.makeText(context, "未找到阿福 App，请确认已安装", Toast.LENGTH_SHORT).show()
-                    }
-                },
+                onProvisionPermanent = { viewModel.requestPrivilegedPermission() },
+                onOpenPrivilegeDialog = { showPrivilegeSheet = true },
+                onRequestIgnoreBatteryOptimizations = requestIgnoreBatteryOptimizations,
+                onLaunchAfu = openAfu,
                 onOpenGuide = { showGuideSheet = true }
             )
 
@@ -159,16 +170,9 @@ fun DashboardScreen(
             } ?: run {
                 EmptyMeasurementCard(
                     isServiceActive = uiState.isAccessibilityEnabled,
-                    onLaunchAfu = {
-                        val launchIntent = context.packageManager.getLaunchIntentForPackage("com.antgroup.aijk.android")
-                        if (launchIntent != null) {
-                            context.startActivity(launchIntent)
-                        } else {
-                            Toast.makeText(context, "未找到阿福 App", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                    onLaunchAfu = openAfu,
                     onOpenSettings = {
-                        AccessibilityController.openServiceSettings(context)
+                        viewModel.onAccessibilitySwitchChanged(true)
                     }
                 )
             }
@@ -232,41 +236,49 @@ fun DashboardScreen(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
         ) {
             PermissionGuideSheetContent(
+                privilege = uiState.privilege,
+                isProvisioning = uiState.isProvisioning,
                 isBatteryIgnored = uiState.isBatteryOptimizationIgnored,
-                onOpenAppDetails = {
-                    try {
-                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.fromParts("package", context.packageName, null)
-                        }
-                        context.startActivity(intent)
-                    } catch (_: Exception) {}
+                onOpenAppDetails = { AccessibilitySystem.openAppDetails(context) },
+                onOpenAccessibilitySettings = { AccessibilitySystem.openServiceSettings(context) },
+                onOpenPrivilegeSetup = {
+                    showGuideSheet = false
+                    showPrivilegeSheet = true
                 },
-                onOpenAccessibilitySettings = {
-                    AccessibilityController.openServiceSettings(context)
-                },
-                onOpenShizukuDownload = {
-                    runCatching {
-                        context.startActivity(
-                            Intent(
-                                Intent.ACTION_VIEW,
-                                Uri.parse("https://github.com/RikkaApps/Shizuku/releases")
-                            )
-                        )
-                    }
-                },
-                onRequestIgnoreBatteryOptimizations = {
-                    try {
-                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = Uri.parse("package:${context.packageName}")
-                        }
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        try {
-                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                        } catch (_: Exception) {}
-                    }
-                },
+                onOpenShizukuDownload = { PrivilegedAccess.openShizukuDownload(context) },
+                onRequestIgnoreBatteryOptimizations = requestIgnoreBatteryOptimizations,
                 onDismiss = { showGuideSheet = false }
+            )
+        }
+    }
+
+    // ── 一次性永久授权 BottomSheet（GKD 同款「高级授权」流程） ──────────────────
+    if (showPrivilegeSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showPrivilegeSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            PrivilegeSetupSheetContent(
+                privilege = uiState.privilege,
+                isProvisioning = uiState.isProvisioning,
+                adbCommand = adbCommand,
+                isShizukuInstalled = remember(uiState.privilege.mode) {
+                    PrivilegedAccess.isShizukuInstalled(context)
+                },
+                onProvision = { viewModel.requestPrivilegedPermission() },
+                onOpenShizuku = { PrivilegedAccess.openShizuku(context) },
+                onCopyCommand = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("adb_provision", adbCommand))
+                    Toast.makeText(context, "ADB 命令已复制", Toast.LENGTH_SHORT).show()
+                },
+                onRecheck = { viewModel.onPrivilegeRechecked() },
+                onOpenSystemSettings = {
+                    showPrivilegeSheet = false
+                    AccessibilitySystem.openServiceSettings(context)
+                },
+                onDismiss = { showPrivilegeSheet = false }
             )
         }
     }
@@ -281,7 +293,8 @@ private fun HeroServiceStatusCard(
     uiState: ScaleUiState,
     onAccessibilitySwitchChanged: (Boolean) -> Unit,
     onRepairAccessibility: () -> Unit,
-    onRequestPrivilegedPermission: () -> Unit,
+    onProvisionPermanent: () -> Unit,
+    onOpenPrivilegeDialog: () -> Unit,
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onLaunchAfu: () -> Unit,
     onOpenGuide: () -> Unit
@@ -339,22 +352,24 @@ private fun HeroServiceStatusCard(
             AccessibilitySwitchRow(
                 state = a11yState,
                 busy = uiState.isAccessibilityBusy,
-                privilegedState = uiState.privilegedState,
+                isProvisioning = uiState.isProvisioning,
+                privilege = uiState.privilege,
                 onSwitchChanged = onAccessibilitySwitchChanged,
-                onRequestPrivilegedPermission = onRequestPrivilegedPermission
+                onProvisionPermanent = onProvisionPermanent,
+                onOpenPrivilegeDialog = onOpenPrivilegeDialog
             )
 
             // 描述提示语 (精简、克制)
             Text(
                 text = when (a11yState) {
                     AccessibilityState.RUNNING ->
-                        "前台监听服务常驻保护中，在阿福中完成测秤即可自动抓取并同步。"
+                        "无障碍监听已连接，在阿福中完成测秤即可自动抓取并同步；不依赖常驻通知保活。"
 
                     AccessibilityState.ENABLED_NOT_RUNNING ->
                         "系统显示开关是开的，但服务其实没有在运行（多为后台清理或系统限制所致），点下方按钮即可重新拉起。"
 
                     AccessibilityState.DISABLED ->
-                        "需要开启无障碍服务，以便在打开阿福身体成分弹窗时自动解析数据。"
+                        "需要开启无障碍服务，以便在打开阿福身体成分弹窗时自动解析数据。一次性授权后可在应用内直接开关。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -387,7 +402,7 @@ private fun HeroServiceStatusCard(
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("打开阿福 App 测秤", style = MaterialTheme.typography.labelLarge)
                     }
@@ -396,7 +411,7 @@ private fun HeroServiceStatusCard(
                 AccessibilityState.ENABLED_NOT_RUNNING -> {
                     Button(
                         onClick = onRepairAccessibility,
-                        enabled = !uiState.isAccessibilityBusy,
+                        enabled = !uiState.isAccessibilityBusy && !uiState.isProvisioning,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp),
@@ -406,7 +421,11 @@ private fun HeroServiceStatusCard(
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            if (uiState.isAccessibilityBusy) "正在重新拉起..." else "一键重启无障碍服务",
+                            when {
+                                uiState.isAccessibilityBusy -> "正在重新拉起..."
+                                !uiState.privilege.canControlInApp -> "修复无障碍（需一次性授权）"
+                                else -> "一键重启无障碍服务"
+                            },
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
@@ -415,7 +434,7 @@ private fun HeroServiceStatusCard(
                 AccessibilityState.DISABLED -> {
                     Button(
                         onClick = { onAccessibilitySwitchChanged(true) },
-                        enabled = !uiState.isAccessibilityBusy,
+                        enabled = !uiState.isAccessibilityBusy && !uiState.isProvisioning,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp),
@@ -425,7 +444,11 @@ private fun HeroServiceStatusCard(
                         Icon(Icons.Default.Accessibility, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            if (uiState.isAccessibilityBusy) "正在开启..." else "开启无障碍服务",
+                            when {
+                                uiState.isAccessibilityBusy -> "正在开启..."
+                                !uiState.privilege.canControlInApp -> "开启无障碍（需一次性授权）"
+                                else -> "开启无障碍服务"
+                            },
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
@@ -455,7 +478,7 @@ private fun HeroServiceStatusCard(
                     onClick = onOpenGuide,
                     contentPadding = PaddingValues(horizontal = 4.dp)
                 ) {
-                    Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("权限配置向导", style = MaterialTheme.typography.labelMedium)
                 }
@@ -508,10 +531,15 @@ private fun StatusPill(
 private fun AccessibilitySwitchRow(
     state: AccessibilityState,
     busy: Boolean,
-    privilegedState: PrivilegedChannel.State,
+    isProvisioning: Boolean,
+    privilege: PrivilegeStatus,
     onSwitchChanged: (Boolean) -> Unit,
-    onRequestPrivilegedPermission: () -> Unit
+    onProvisionPermanent: () -> Unit,
+    onOpenPrivilegeDialog: () -> Unit
 ) {
+    val permanent = privilege.mode == PrivilegeMode.PERMANENT
+    val channelClickable = !permanent && !isProvisioning
+
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -546,27 +574,38 @@ private fun AccessibilitySwitchRow(
                 Switch(
                     checked = state != AccessibilityState.DISABLED,
                     onCheckedChange = { onSwitchChanged(it) },
-                    enabled = !busy
+                    enabled = !busy && !isProvisioning
                 )
             }
 
             // 特权通道状态：决定能否在应用内直接开关 / 重启
-            val (channelText, channelClickable) = when (privilegedState) {
-                PrivilegedChannel.State.READY ->
-                    "应用内可直接开关（Shizuku 已就绪）" to false
+            val channelText = when (privilege.mode) {
+                PrivilegeMode.PERMANENT ->
+                    "永久授权已生效 · 重启手机 / 关闭开发者选项后仍可应用内开关"
 
-                PrivilegedChannel.State.NEED_PERMISSION ->
-                    "授权 Shizuku 后可在应用内一键开关" to true
+                PrivilegeMode.SHIZUKU_READY ->
+                    "Shizuku 已连接 · 点此完成一次性永久授权"
 
-                PrivilegedChannel.State.UNAVAILABLE ->
-                    "未接入特权通道，开关将跳转系统设置" to false
+                PrivilegeMode.SHIZUKU_NEED_PERMISSION ->
+                    "Shizuku 待授权 · 点此授权并启用免跳转开关"
+
+                PrivilegeMode.NONE ->
+                    "未接入特权通道 · 点此查看一次性授权方法"
             }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
                         if (channelClickable) {
-                            Modifier.clickable { onRequestPrivilegedPermission() }
+                            Modifier.clickable {
+                                when (privilege.mode) {
+                                    PrivilegeMode.SHIZUKU_READY,
+                                    PrivilegeMode.SHIZUKU_NEED_PERMISSION -> onProvisionPermanent()
+
+                                    PrivilegeMode.NONE -> onOpenPrivilegeDialog()
+                                    PrivilegeMode.PERMANENT -> Unit
+                                }
+                            }
                         } else {
                             Modifier
                         }
@@ -574,13 +613,9 @@ private fun AccessibilitySwitchRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = if (privilegedState == PrivilegedChannel.State.READY) {
-                        Icons.Default.Bolt
-                    } else {
-                        Icons.Default.LockOpen
-                    },
+                    imageVector = if (permanent) Icons.Default.Bolt else Icons.Default.LockOpen,
                     contentDescription = null,
-                    tint = if (privilegedState == PrivilegedChannel.State.READY) {
+                    tint = if (permanent) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -591,12 +626,26 @@ private fun AccessibilitySwitchRow(
                 Text(
                     text = channelText,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (privilegedState == PrivilegedChannel.State.READY) {
+                    color = if (permanent) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 )
+                if (isProvisioning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else if (channelClickable) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
@@ -900,7 +949,7 @@ private fun EmptyMeasurementCard(
                     onClick = onLaunchAfu,
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("前往阿福 App 测秤")
                 }
@@ -923,9 +972,12 @@ private fun EmptyMeasurementCard(
  */
 @Composable
 private fun PermissionGuideSheetContent(
+    privilege: PrivilegeStatus,
+    isProvisioning: Boolean,
     isBatteryIgnored: Boolean,
     onOpenAppDetails: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenPrivilegeSetup: () -> Unit,
     onOpenShizukuDownload: () -> Unit,
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onDismiss: () -> Unit
@@ -949,7 +1001,7 @@ private fun PermissionGuideSheetContent(
             }
         }
 
-        // 第 1 步：受限设置解除说明
+        // 第 1 步：一次性永久授权（GKD 高级授权模型）
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface
@@ -959,26 +1011,53 @@ private fun PermissionGuideSheetContent(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.LockOpen, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Bolt, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("1. 解除受限设置 (Android 13+)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                    Text("1. 一次性永久授权（推荐）", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                 }
                 Text(
-                    text = "自行安装的 APK 默认受系统安全限制。若在系统无障碍设置中发现开关呈灰色不可点击，请：\n" +
-                            "• 点击下方按钮进入『应用信息』\n" +
-                            "• 点击右上角三个点 (⋮)，选择『允许受限制的设置』并验证锁屏密码。",
+                    text = "通过 Shizuku 或电脑 ADB 执行一次 pm grant，把 WRITE_SECURE_SETTINGS 授予本应用。\n" +
+                            "• 授权永久有效，重启手机、关闭开发者选项、Shizuku 退出后依然可用；\n" +
+                            "• 之后首页的无障碍开关 / 掉线重启全部在应用内完成，不再跳系统设置。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 18.sp
                 )
-                Button(
-                    onClick = onOpenAppDetails,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("前往应用信息页")
+                Text(
+                    text = when (privilege.mode) {
+                        PrivilegeMode.PERMANENT -> "✓ 永久授权已生效"
+                        PrivilegeMode.SHIZUKU_READY -> "Shizuku 已连接，可一键完成授权"
+                        PrivilegeMode.SHIZUKU_NEED_PERMISSION -> "Shizuku 正在运行，等待本应用授权"
+                        PrivilegeMode.NONE -> "尚未接入特权通道"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (privilege.mode == PrivilegeMode.PERMANENT) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (privilege.mode != PrivilegeMode.PERMANENT) {
+                    Button(
+                        onClick = onOpenPrivilegeSetup,
+                        enabled = !isProvisioning,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("查看一次性授权方法")
+                    }
+                    OutlinedButton(
+                        onClick = onOpenShizukuDownload,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("获取 Shizuku")
+                    }
                 }
             }
         }
@@ -998,40 +1077,30 @@ private fun PermissionGuideSheetContent(
                     Text("2. 开启无障碍监听", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                 }
                 Text(
-                    text = "推荐直接在应用内打开首页的「无障碍服务」开关：\n" +
-                            "• 已授权 Shizuku 时，开关会在应用内静默生效，无需跳转；\n" +
-                            "• 未授权时，开关会直达本服务在系统设置里的详情页，拨一次即可。\n" +
-                            "若列表里找不到本服务，可手动在『已下载的应用 / 无障碍』中找到『阿福数据自动提取服务』开启。",
+                    text = "完成第 1 步后，直接拨动首页「无障碍服务」开关即可在应用内生效。\n" +
+                            "若还没有永久授权，也可以临时跳到本服务的系统设置详情页，手动拨一次滑块。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
                 )
                 Button(
                     onClick = onOpenAccessibilitySettings,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("直达系统无障碍设置")
+                    Text("直达系统无障碍设置（备用）")
                 }
-                Text(
-                    text = "可选增强：安装 Shizuku 并授权本应用后，无障碍开关 / 掉线重启都能在应用内一键完成（与 GKD 同款体验）。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedButton(
-                    onClick = onOpenShizukuDownload,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                TextButton(onClick = onOpenAppDetails) {
+                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("获取 Shizuku")
+                    Text("应用信息页（解除受限设置）")
                 }
             }
         }
 
-        // 第 3 步：后台保活与加锁
+        // 第 3 步：后台与自恢复
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface
@@ -1043,12 +1112,13 @@ private fun PermissionGuideSheetContent(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("3. 后台无限制防掉权限", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                    Text("3. 后台与自动恢复", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                 }
                 Text(
-                    text = "系统会在待机或多任务清理时回收权限。建议：\n" +
-                            "• 开启电池优化白名单 (无限制)\n" +
-                            "• 在多任务任务列表中将本应用卡片下拉加锁。",
+                    text = "本应用不再使用前台服务，也不会挂常驻通知。建议：\n" +
+                            "• 开启电池优化白名单（无限制）\n" +
+                            "• 在多任务列表中将本应用卡片下拉加锁\n" +
+                            "• 可选：把「阿福同步」磁贴加到通知栏快捷开关，掉线时点一下即可恢复。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 18.sp
@@ -1082,6 +1152,216 @@ private fun PermissionGuideSheetContent(
             }
         }
     }
+}
+
+/**
+ * 一次性永久授权说明与操作面板。
+ *
+ * 对齐 GKD 的「高级授权」：Shizuku 只负责执行一次 pm grant，
+ * 之后 App 直接写 Secure Settings，不再依赖 Shizuku 常驻。
+ */
+@Composable
+private fun PrivilegeSetupSheetContent(
+    privilege: PrivilegeStatus,
+    isProvisioning: Boolean,
+    adbCommand: String,
+    isShizukuInstalled: Boolean,
+    onProvision: () -> Unit,
+    onOpenShizuku: () -> Unit,
+    onCopyCommand: () -> Unit,
+    onRecheck: () -> Unit,
+    onOpenSystemSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val permanent = privilege.mode == PrivilegeMode.PERMANENT
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 36.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("一次性授权，长期免跳转", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, contentDescription = "关闭")
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = if (permanent) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            }
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = if (permanent) "✓ 永久授权已生效" else "当前状态：${privilege.mode.label()}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (permanent) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = if (permanent) {
+                        "即使关闭开发者选项、重启手机，或 Shizuku 不再运行，仍可在应用内直接开关 / 重启无障碍服务。"
+                    } else {
+                        "授权一次后，无障碍开关与掉线恢复都不再依赖 Shizuku 常驻。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        if (!permanent) {
+            Text(
+                text = "授权内容为 WRITE_SECURE_SETTINGS（写入安全设置），仅用于开关本应用的无障碍服务，不会读取或修改其他系统设置。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp
+            )
+
+            when (privilege.shizukuState) {
+                ShizukuState.READY -> {
+                    Button(
+                        onClick = onProvision,
+                        enabled = !isProvisioning,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isProvisioning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (isProvisioning) "正在授权..." else "用 Shizuku 一键授权")
+                    }
+                }
+
+                ShizukuState.NEED_PERMISSION -> {
+                    Button(
+                        onClick = onProvision,
+                        enabled = !isProvisioning,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (isProvisioning) "正在授权..." else "授权 Shizuku 并继续")
+                    }
+                }
+
+                ShizukuState.UNAVAILABLE -> {
+                    Text(
+                        text = "Shizuku 当前未运行。你可以先打开 Shizuku 再回来一键授权，或者在电脑上执行下面的 ADB 命令。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 18.sp
+                    )
+                    Button(
+                        onClick = onOpenShizuku,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (isShizukuInstalled) "打开 Shizuku" else "获取 Shizuku")
+                    }
+                }
+            }
+
+            OutlinedButton(
+                onClick = onCopyCommand,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("复制 ADB 命令")
+            }
+
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = adbCommand,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+            Text(
+                text = "在电脑终端执行一次即可。执行后回到本页点「重新检测」；若仍显示未授权，请确认手机已开启 USB 调试并允许本机调试。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp
+            )
+            TextButton(onClick = onRecheck, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("我已授权，重新检测")
+            }
+        } else {
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("完成")
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        Text(
+            text = "为什么不再需要常驻通知？\n无障碍服务由系统绑定和托管，适合长期驻留；应用被清理后，打开本应用、回到前台或点击快捷开关都会自动检测并恢复。前台服务与常驻通知不再是保活的前提。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 18.sp
+        )
+        Text(
+            text = "可选：在通知栏快捷开关中添加「阿福同步」磁贴。磁贴只在面板可见时显示状态，点一下即可开关 / 恢复无障碍，不产生任何常驻通知。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 18.sp
+        )
+
+        TextButton(onClick = onOpenSystemSettings, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("仍去系统无障碍设置")
+        }
+    }
+}
+
+private fun PrivilegeMode.label(): String = when (this) {
+    PrivilegeMode.PERMANENT -> "永久授权已生效"
+    PrivilegeMode.SHIZUKU_READY -> "Shizuku 已连接，待一键授权"
+    PrivilegeMode.SHIZUKU_NEED_PERMISSION -> "Shizuku 待授权"
+    PrivilegeMode.NONE -> "未接入特权通道"
 }
 
 private fun trimNum(value: Double): String {

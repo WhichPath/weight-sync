@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.dianzicheng.data.garmin.GarminAuthManager
 import com.example.dianzicheng.data.garmin.GarminSyncService
 import com.example.dianzicheng.data.health.HealthConnectManager
-import com.example.dianzicheng.data.local.AppLogger
+import com.example.dianzicheng.core.logging.AppLogger
 import com.example.dianzicheng.data.local.PreferenceManager
 import com.example.dianzicheng.data.repository.ScaleRepository
 import com.example.dianzicheng.domain.Sex
@@ -29,7 +29,7 @@ class ProfileViewModel(
     private val scaleRepository: ScaleRepository,
     private val garminAuthManager: GarminAuthManager,
     private val garminSyncService: GarminSyncService,
-    private val healthConnectManager: HealthConnectManager? = null
+    private val healthConnectManager: HealthConnectManager
 ) : ViewModel() {
 
     // ── 个人身体档案 ──────────────────────────────────────────────────────────
@@ -140,10 +140,6 @@ class ProfileViewModel(
     }
 
     fun syncAllToHealthConnect() {
-        val hc = healthConnectManager ?: run {
-            _statusMessage.value = "Health Connect 不可用"
-            return
-        }
         viewModelScope.launch {
             _isOperating.value = true
             _statusMessage.value = "正在同步记录至系统健康..."
@@ -151,7 +147,7 @@ class ProfileViewModel(
                 val all = scaleRepository.getAllMeasurements()
                 var successCount = 0
                 for (item in all) {
-                    if (hc.writeMeasurement(item)) successCount++
+                    if (healthConnectManager.writeMeasurement(item)) successCount++
                 }
                 _statusMessage.value = "成功同步 $successCount/${all.size} 条记录至 Health Connect"
             } catch (e: Exception) {

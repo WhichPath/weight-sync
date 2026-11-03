@@ -1,7 +1,7 @@
 package com.example.dianzicheng.data.garmin
 
 import android.content.Context
-import com.example.dianzicheng.data.local.AppLogger
+import com.example.dianzicheng.core.logging.AppLogger
 import com.example.dianzicheng.data.local.PreferenceManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -232,7 +232,9 @@ class GarminAuthManager(
             val response = httpClient.newCall(request).execute()
             if (response.isSuccessful) {
                 val json = JSONObject(response.body?.string() ?: "{}")
-                json.optString("displayName", json.optString("userName", null))
+                val displayName = json.optString("displayName")
+                    .ifBlank { json.optString("userName") }
+                displayName.ifBlank { null }
             } else null
         } catch (e: Exception) {
             null

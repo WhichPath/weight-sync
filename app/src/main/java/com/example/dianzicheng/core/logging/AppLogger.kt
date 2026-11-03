@@ -1,4 +1,4 @@
-package com.example.dianzicheng.data.local
+package com.example.dianzicheng.core.logging
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

@@ -9,7 +9,9 @@
 -keep class com.example.dianzicheng.data.garmin.** { *; }
 -keep class com.example.dianzicheng.data.health.** { *; }
 -keep class com.example.dianzicheng.data.repository.** { *; }
--keep class com.example.dianzicheng.service.** { *; }
+-keep class com.example.dianzicheng.accessibility.** { *; }
+-keep class com.example.dianzicheng.core.** { *; }
+-keep class com.example.dianzicheng.di.** { *; }
 -keep class com.example.dianzicheng.ui.** { *; }
 
 # Keep Room database and entities

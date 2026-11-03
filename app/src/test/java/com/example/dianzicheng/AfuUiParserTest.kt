@@ -1,8 +1,8 @@
 package com.example.dianzicheng
 
 import com.example.dianzicheng.domain.UserProfile
-import com.example.dianzicheng.service.AfuUiParser
-import com.example.dianzicheng.service.AfuUiParser.Metric
+import com.example.dianzicheng.accessibility.AfuUiParser
+import com.example.dianzicheng.accessibility.AfuUiParser.Metric
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

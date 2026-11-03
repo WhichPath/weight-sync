@@ -1,4 +1,4 @@
-package com.example.dianzicheng.service
+package com.example.dianzicheng.accessibility
 
 import com.example.dianzicheng.domain.BodyMeasurement
 import com.example.dianzicheng.domain.Sex

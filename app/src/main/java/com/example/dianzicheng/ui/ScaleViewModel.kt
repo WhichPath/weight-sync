@@ -1,37 +1,42 @@
 package com.example.dianzicheng.ui
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.dianzicheng.accessibility.AccessibilityController
+import com.example.dianzicheng.accessibility.AccessibilityRepository
+import com.example.dianzicheng.accessibility.AccessibilityState
+import com.example.dianzicheng.accessibility.PrivilegeMode
+import com.example.dianzicheng.accessibility.PrivilegedAccess
+import com.example.dianzicheng.core.logging.AppLogger
 import com.example.dianzicheng.data.garmin.GarminSyncService
-import com.example.dianzicheng.data.health.HealthConnectManager
-import com.example.dianzicheng.data.local.AppLogger
 import com.example.dianzicheng.data.local.PreferenceManager
 import com.example.dianzicheng.data.repository.ScaleRepository
-import com.example.dianzicheng.domain.BodyMeasurement
-import com.example.dianzicheng.domain.UserProfile
-import com.example.dianzicheng.service.AccessibilityController
-import com.example.dianzicheng.service.AccessibilityState
-import com.example.dianzicheng.service.AccessibilityUtils
-import com.example.dianzicheng.service.AfuAccessibilityService
-import com.example.dianzicheng.service.PrivilegedChannel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "ScaleVM"
 
 /**
  * 阿福 UI 抓取与同步 ViewModel。
- * 监控无障碍服务的真实状态、特权通道状态及最新抓取的身体成分数据。
+ *
+ * 架构约束：这里不持有 Context，也不直接调用 Settings / Shizuku；
+ * 所有无障碍系统操作都通过 [AccessibilityRepository] 完成。
  */
 class ScaleViewModel(
-    private val context: Context,
     private val repository: ScaleRepository,
     private val preferenceManager: PreferenceManager,
-    private val healthConnectManager: HealthConnectManager? = null,
-    private val garminSyncService: GarminSyncService? = null
+    private val accessibilityRepository: AccessibilityRepository,
+    private val garminSyncService: GarminSyncService
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ScaleUiState())
@@ -39,6 +44,14 @@ class ScaleViewModel(
 
     private val _events = MutableSharedFlow<ScaleUiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<ScaleUiEvent> = _events.asSharedFlow()
+
+    /** 用户在没有特权时拨动开关，授权成功后自动继续执行的动作 */
+    private var pendingSwitchAfterGrant: Boolean? = null
+
+    /** 用户点击“Shizuku 授权”，授权回调成功后自动继续永久授权 */
+    private var pendingProvisionAfterShizukuGrant = false
+
+    private var lastAutoRepairAtMs = 0L
 
     init {
         refreshStatus()
@@ -50,28 +63,40 @@ class ScaleViewModel(
     }
 
     fun refreshStatus() {
-        val state = AccessibilityUtils.currentState(context)
-        val privileged = PrivilegedChannel.state()
-        val restricted = AccessibilityUtils.isRestrictedBySystem(context)
-        val batteryIgnored = AccessibilityUtils.isIgnoringBatteryOptimizations(context)
+        viewModelScope.launch { refreshStatusNow() }
+    }
 
+    /**
+     * 状态读取包含 Settings / Shizuku binder 查询，统一放到 IO 线程，避免轮询卡顿主线程。
+     */
+    private suspend fun refreshStatusNow() {
+        val status = withContext(Dispatchers.IO) { accessibilityRepository.status() }
         _uiState.update {
             it.copy(
-                accessibilityState = state,
-                privilegedState = privileged,
-                isRestrictedBySystem = restricted,
-                isBatteryOptimizationIgnored = batteryIgnored
+                accessibilityState = status.state,
+                privilege = status.privilege,
+                isRestrictedBySystem = status.isRestrictedBySystem,
+                isBatteryOptimizationIgnored = status.isBatteryOptimizationIgnored
             )
         }
     }
 
     /**
-     * 轮询状态：系统在设置页被改动、或服务被系统回收后，界面能第一时间反映真实状态。
+     * Activity 回到前台时调用：刷新状态，并尝试自动修复“开着但没跑”的掉线态。
+     */
+    fun onAppResumed() {
+        refreshStatus()
+        scheduleAutoRepair(delayMs = 300L)
+    }
+
+    /**
+     * 轮询状态：系统设置页被改动、服务被系统回收后，界面能第一时间反映真实状态。
+     * 5 秒一次，避免无障碍服务自身的事件流之外还要高频唤醒。
      */
     private fun startStatusWatcher() {
         viewModelScope.launch {
             while (isActive) {
-                delay(3_000L)
+                delay(5_000L)
                 refreshStatus()
             }
         }
@@ -80,28 +105,33 @@ class ScaleViewModel(
     /**
      * 自动恢复（对齐 GKD 的 fixA11yService）：
      *
-     * App 被后台清理后，系统设置里的开关仍是"开"的，但服务并没有被拉起。
-     * 这里在打开 App 时检测到这种"开着但没跑"的异常态，就自动把它摘掉再挂回，
+     * App 被后台清理后，系统设置里的开关仍是“开”的，但服务并没有被拉起。
+     * 这里检测到这种“开着但没跑”的异常态，就自动把它摘掉再挂回，
      * 强制系统重新绑定，用户不需要再去系统设置手动关开一次。
      */
-    private fun scheduleAutoRepair() {
+    private fun scheduleAutoRepair(delayMs: Long = 1_500L) {
         viewModelScope.launch {
-            // 等待系统状态稳定（避免刚开机 / 刚切换设置时误判）
-            delay(1_500L)
-            val state = AccessibilityUtils.currentState(context)
-            if (state != AccessibilityState.ENABLED_NOT_RUNNING) return@launch
-            if (PrivilegedChannel.state() != PrivilegedChannel.State.READY) return@launch
+            delay(delayMs)
+            val now = System.currentTimeMillis()
+            if (now - lastAutoRepairAtMs < 10_000L) return@launch
 
+            val status = withContext(Dispatchers.IO) { accessibilityRepository.status() }
+            if (status.state != AccessibilityState.ENABLED_NOT_RUNNING) return@launch
+            if (!status.privilege.canControlInApp) return@launch
+
+            lastAutoRepairAtMs = now
             AppLogger.i(TAG, "检测到无障碍服务处于「已开启但未运行」，尝试自动重新拉起")
-            val outcome = AccessibilityController.restart(context)
-            when (outcome) {
-                is AccessibilityController.Outcome.Success ->
+            when (val outcome = accessibilityRepository.restart()) {
+                AccessibilityController.Outcome.Success ->
                     _events.tryEmit(ScaleUiEvent.Toast("无障碍服务已自动恢复"))
 
-                is AccessibilityController.Outcome.NotRunning ->
+                AccessibilityController.Outcome.NotRunning ->
                     AppLogger.w(TAG, "自动恢复失败：服务仍未启动")
 
-                else -> Unit
+                AccessibilityController.Outcome.NeedPrivilege -> Unit
+
+                is AccessibilityController.Outcome.Failed ->
+                    AppLogger.w(TAG, "自动恢复失败: ${outcome.message}")
             }
             refreshStatus()
         }
@@ -110,14 +140,14 @@ class ScaleViewModel(
     private fun observeUserProfile() {
         viewModelScope.launch {
             preferenceManager.userProfile.collect { profile ->
-                _uiState.update { it.copy(userProfile = profile ?: UserProfile()) }
+                _uiState.update { it.copy(userProfile = profile) }
             }
         }
     }
 
     private fun observeScrapedData() {
         viewModelScope.launch {
-            AfuAccessibilityService.lastCapturedMeasurement.collect { measurement ->
+            accessibilityRepository.lastCapturedMeasurement.collect { measurement ->
                 if (measurement != null) {
                     _uiState.update { it.copy(currentMeasurement = measurement) }
                 }
@@ -125,19 +155,19 @@ class ScaleViewModel(
         }
 
         viewModelScope.launch {
-            AfuAccessibilityService.lastScrapeLog.collect { log ->
+            accessibilityRepository.lastScrapeLog.collect { log ->
                 _uiState.update { it.copy(lastLogMessage = log) }
             }
         }
 
         viewModelScope.launch {
-            AfuAccessibilityService.lastRawInspectionLog.collect { log ->
+            accessibilityRepository.lastRawInspectionLog.collect { log ->
                 _uiState.update { it.copy(rawInspectionLog = log) }
             }
         }
 
         viewModelScope.launch {
-            AfuAccessibilityService.isServiceActive.collect {
+            accessibilityRepository.isServiceActive.collect {
                 refreshStatus()
             }
         }
@@ -156,37 +186,48 @@ class ScaleViewModel(
 
     /**
      * 用户在应用内拨动无障碍开关。
+     *
+     * 没有可用的写入通道时，不直接跳系统设置，而是弹出“一次性永久授权”流程；
+     * 授权成功后自动继续执行本次开关动作。
      */
     fun onAccessibilitySwitchChanged(enabled: Boolean) {
         if (_uiState.value.isAccessibilityBusy) return
-        if (enabled) {
-            enableAccessibility()
-        } else {
-            disableAccessibility()
+        if (!_uiState.value.privilege.canControlInApp) {
+            pendingSwitchAfterGrant = enabled
+            _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+            return
         }
+        if (enabled) enableAccessibility() else disableAccessibility()
     }
 
-    /**
-     * 开启无障碍服务：优先走特权通道在应用内静默完成；
-     * 没有特权通道时跳到该服务的系统设置页（只需拨一次滑块）。
-     */
+    /** 开启无障碍服务：优先走永久授权直接写入；仅 Shizuku 时走临时命令。 */
     fun enableAccessibility() {
+        if (_uiState.value.isAccessibilityBusy) return
+        if (!_uiState.value.privilege.canControlInApp) {
+            pendingSwitchAfterGrant = true
+            _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isAccessibilityBusy = true) }
-            val outcome = AccessibilityController.setEnabled(context, true)
+            val outcome = accessibilityRepository.setEnabled(true)
             handleOutcome(outcome, successMessage = "无障碍服务已开启")
             _uiState.update { it.copy(isAccessibilityBusy = false) }
             refreshStatus()
         }
     }
 
-    /**
-     * 关闭无障碍服务。
-     */
+    /** 关闭无障碍服务。 */
     fun disableAccessibility() {
+        if (_uiState.value.isAccessibilityBusy) return
+        if (!_uiState.value.privilege.canControlInApp) {
+            pendingSwitchAfterGrant = false
+            _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isAccessibilityBusy = true) }
-            val outcome = AccessibilityController.setEnabled(context, false)
+            val outcome = accessibilityRepository.setEnabled(false)
             handleOutcome(outcome, successMessage = "无障碍服务已关闭")
             _uiState.update { it.copy(isAccessibilityBusy = false) }
             refreshStatus()
@@ -194,14 +235,18 @@ class ScaleViewModel(
     }
 
     /**
-     * 修复"系统显示已开启、实际无法运行"的掉线状态：
-     * 把服务从 enabled_accessibility_services 里摘掉再挂回，强制系统重新绑定。
+     * 修复“系统显示已开启、实际无法运行”的掉线状态。
      */
     fun repairAccessibility() {
         if (_uiState.value.isAccessibilityBusy) return
+        if (!_uiState.value.privilege.canControlInApp) {
+            pendingSwitchAfterGrant = true
+            _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isAccessibilityBusy = true) }
-            val outcome = AccessibilityController.restart(context)
+            val outcome = accessibilityRepository.restart()
             handleOutcome(outcome, successMessage = "无障碍服务已重新拉起")
             _uiState.update { it.copy(isAccessibilityBusy = false) }
             refreshStatus()
@@ -209,15 +254,110 @@ class ScaleViewModel(
     }
 
     /**
-     * 申请 Shizuku 授权（授权后即可在应用内直接开关无障碍）。
+     * 统一的一次性永久授权入口：
+     *  - 已永久授权：无事发生；
+     *  - Shizuku 就绪：直接 pm grant + appops；
+     *  - Shizuku 待授权：先拉起 Shizuku 授权弹窗；
+     *  - Shizuku 不可用：展示 ADB 手动授权流程。
      */
     fun requestPrivilegedPermission() {
-        PrivilegedChannel.requestPermission()
+        viewModelScope.launch {
+            refreshStatusNow()
+            when (_uiState.value.privilege.mode) {
+                PrivilegeMode.PERMANENT -> {
+                    _events.tryEmit(ScaleUiEvent.Toast("永久授权已生效，无需重复授权"))
+                }
+
+                PrivilegeMode.SHIZUKU_READY -> provisionPermanentAccess()
+
+                PrivilegeMode.SHIZUKU_NEED_PERMISSION -> {
+                    pendingProvisionAfterShizukuGrant = true
+                    accessibilityRepository.requestShizukuPermission()
+                }
+
+                PrivilegeMode.NONE -> _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+            }
+        }
     }
 
     /**
-     * 用户拒绝授权或系统没有特权通道时，退回到系统设置页。
+     * 执行一次性永久授权。成功后，如果用户此前拨动了开关，会自动继续执行。
      */
+    fun provisionPermanentAccess() {
+        if (_uiState.value.isProvisioning) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProvisioning = true) }
+            when (val result = accessibilityRepository.provisionPermanentAccess()) {
+                PrivilegedAccess.ProvisionResult.Success -> {
+                    AppLogger.i(TAG, "一次性永久授权成功")
+                    _events.tryEmit(
+                        ScaleUiEvent.Toast("永久授权已生效：重启手机或关闭开发者选项后仍可应用内开关")
+                    )
+                    // 必须先同步刷新 UI 状态，否则下面的 pending 开关动作会看到旧权限而再次弹窗。
+                    refreshStatusNow()
+
+                    val pendingAction = pendingSwitchAfterGrant
+                    pendingSwitchAfterGrant = null
+                    if (pendingAction != null) {
+                        onAccessibilitySwitchChanged(pendingAction)
+                    }
+                }
+
+                PrivilegedAccess.ProvisionResult.NeedShizukuPermission -> {
+                    pendingProvisionAfterShizukuGrant = true
+                    _events.tryEmit(ScaleUiEvent.Toast("请在 Shizuku 弹窗中允许本应用"))
+                    accessibilityRepository.requestShizukuPermission()
+                }
+
+                PrivilegedAccess.ProvisionResult.ShizukuUnavailable -> {
+                    _events.tryEmit(
+                        ScaleUiEvent.Toast("Shizuku 未运行，可复制 ADB 命令手动完成一次授权")
+                    )
+                    _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+                }
+
+                is PrivilegedAccess.ProvisionResult.Failed -> {
+                    AppLogger.e(TAG, "永久授权失败: ${result.message}")
+                    _events.tryEmit(ScaleUiEvent.Toast("永久授权失败：${result.message}"))
+                    _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
+                }
+            }
+            _uiState.update { it.copy(isProvisioning = false) }
+            refreshStatus()
+        }
+    }
+
+    /**
+     * 用户手动执行 ADB 命令后，在授权面板点“重新检测”时调用。
+     * 如果此时已经具备权限，并且之前有被中断的开关动作，则自动继续执行。
+     */
+    fun onPrivilegeRechecked() {
+        viewModelScope.launch {
+            refreshStatusNow()
+            if (!_uiState.value.privilege.canControlInApp) return@launch
+
+            val pendingAction = pendingSwitchAfterGrant
+            pendingSwitchAfterGrant = null
+            if (pendingAction != null) {
+                onAccessibilitySwitchChanged(pendingAction)
+            }
+        }
+    }
+
+    /** Shizuku 授权结果回调（由 MainActivity 转发）。 */
+    fun onShizukuPermissionResult(granted: Boolean) {
+        refreshStatus()
+        if (!granted) {
+            pendingProvisionAfterShizukuGrant = false
+            return
+        }
+        if (pendingProvisionAfterShizukuGrant) {
+            pendingProvisionAfterShizukuGrant = false
+            provisionPermanentAccess()
+        }
+    }
+
+    /** 用户拒绝授权或需要手动兜底时，退回到系统设置页。 */
     fun openSystemAccessibilitySettings() {
         _events.tryEmit(ScaleUiEvent.OpenAccessibilityServiceSettings)
     }
@@ -237,7 +377,7 @@ class ScaleViewModel(
 
             is AccessibilityController.Outcome.NotRunning -> {
                 AppLogger.w(TAG, "无障碍操作后服务仍未启动")
-                if (AccessibilityUtils.isRestrictedBySystem(context)) {
+                if (_uiState.value.isRestrictedBySystem) {
                     _events.tryEmit(ScaleUiEvent.Toast("应用处于受限设置状态，请先允许受限设置"))
                     _events.tryEmit(ScaleUiEvent.OpenAppDetails)
                 } else {
@@ -246,18 +386,8 @@ class ScaleViewModel(
                 }
             }
 
-            is AccessibilityController.Outcome.NeedSystemSettings -> {
-                when (PrivilegedChannel.state()) {
-                    PrivilegedChannel.State.NEED_PERMISSION -> {
-                        _events.tryEmit(ScaleUiEvent.Toast("授权 Shizuku 后即可在应用内一键开关无障碍"))
-                        _events.tryEmit(ScaleUiEvent.RequestShizukuPermission)
-                    }
-
-                    else -> {
-                        _events.tryEmit(ScaleUiEvent.Toast("请在系统设置中打开本应用的无障碍开关"))
-                        _events.tryEmit(ScaleUiEvent.OpenAccessibilityServiceSettings)
-                    }
-                }
+            is AccessibilityController.Outcome.NeedPrivilege -> {
+                _events.tryEmit(ScaleUiEvent.ShowPrivilegeDialog)
             }
 
             is AccessibilityController.Outcome.Failed -> {
@@ -268,11 +398,10 @@ class ScaleViewModel(
     }
 
     /**
-     * 手动触发当前记录同步至 Garmin
+     * 手动触发当前记录同步至 Garmin。
      */
     fun syncCurrentToGarmin() {
         val measurement = _uiState.value.currentMeasurement ?: return
-        if (garminSyncService == null) return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isGarminSyncing = true, garminSyncResult = null) }
@@ -299,12 +428,5 @@ class ScaleViewModel(
                 }
             }
         }
-    }
-
-    @Suppress("unused")
-    private fun stateLabel(state: AccessibilityState): String = when (state) {
-        AccessibilityState.DISABLED -> "未开启"
-        AccessibilityState.ENABLED_NOT_RUNNING -> "已开启但未运行"
-        AccessibilityState.RUNNING -> "运行中"
     }
 }
