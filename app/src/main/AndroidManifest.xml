@@ -19,8 +19,11 @@
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
         <package android:name="com.antgroup.aijk.android" />
-        <!-- Shizuku 特权通道（用于在应用内直接开关 / 重启无障碍服务） -->
+        <!-- Shizuku 兼容管理器：仅用于“打开管理器界面”。
+             特权功能本身走 Shizuku Binder API，不依赖具体包名。 -->
         <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="af.shizuku.plus.api" />
+        <package android:name="roro.stellar.manager" />
     </queries>
 
     <application

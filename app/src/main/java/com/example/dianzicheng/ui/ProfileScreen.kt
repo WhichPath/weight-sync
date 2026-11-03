@@ -81,7 +81,7 @@ fun ProfileScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "档案用于准确计算 BMI、体脂率、骨量及基础代谢等参考指标",
+                            text = "用于计算 BMI、体脂率等指标",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -188,7 +188,7 @@ fun ProfileScreen(
                             ) {
                                 Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
-                                Text("一键同步所有未同步历史")
+                                Text("同步全部未同步记录")
                             }
                         }
                     }
@@ -197,7 +197,7 @@ fun ProfileScreen(
 
             // ── 3. 安卓系统健康连接 ──────────────────────────────────────────
             item {
-                SectionHeader("系统健康连接 (Health Connect)")
+                SectionHeader("Health Connect")
                 GlassCard(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
@@ -214,7 +214,7 @@ fun ProfileScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("写入 Health Connect", fontWeight = FontWeight.SemiBold)
-                                Text("自动将体重与体脂率写入 Android 系统健康", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("自动写入体重与体脂率", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(
                                 checked = healthConnectEnabled,
@@ -228,7 +228,7 @@ fun ProfileScreen(
                                 enabled = !isOperating,
                                 shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("一键同步历史到系统健康")
+                                Text("同步全部记录")
                             }
                         }
                     }
@@ -266,7 +266,7 @@ fun ProfileScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("同步架构", style = MaterialTheme.typography.bodyMedium)
-                            Text("无障碍 UI 自动化解析 + Garmin Direct", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            Text("无障碍解析 + Garmin Direct", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                         }
                     }
                 }

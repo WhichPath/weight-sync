@@ -1,4 +1,4 @@
-# 架构说明（v2.1.0）
+# 架构说明（v2.1.1）
 
 本文档记录 `weight-sync` 在 2.1.0 起的模块边界、依赖方向，以及无障碍特权通道的设计。
 
@@ -59,8 +59,12 @@ com.example.dianzicheng
 
 | 能力 | 获取方式 | 生命周期 | 用途 |
 | --- | --- | --- | --- |
-| `WRITE_SECURE_SETTINGS` | Shizuku 或电脑 ADB 执行一次 `pm grant` | **永久**：重启手机、关闭开发者选项、Shizuku 退出后仍有效 | 直接读写 `Settings.Secure`，应用内开关无障碍 |
-| Shizuku 临时命令 | Shizuku 授权 | 仅在 Shizuku 服务在线期间 | 完成上面的一次性授权；没有永久权限时作为临时写入通道 |
+| `WRITE_SECURE_SETTINGS` | Shizuku / Shizuku+ / Stellar 或电脑 ADB 执行一次 `pm grant` | **永久**：重启手机、关闭开发者选项、管理器退出后仍有效 | 直接读写 `Settings.Secure`，应用内开关无障碍 |
+| Shizuku 临时命令 | Shizuku 兼容管理器授权 | 仅在兼容服务在线期间 | 完成上面的一次性授权；没有永久权限时作为临时写入通道 |
+
+> 兼容性：特权功能走 Shizuku Binder API，不依赖管理器包名。`MANAGER_PACKAGES`
+> 只用于“打开管理器界面”，目前包含 Shizuku、Shizuku+、Stellar。
+
 
 `PrivilegeStatus` 用 `PERMANENT` / `SHIZUKU_READY` / `SHIZUKU_NEED_PERMISSION` / `NONE`
 四种模式表达当前状态，UI 只依据它决定按钮文案与可用性。

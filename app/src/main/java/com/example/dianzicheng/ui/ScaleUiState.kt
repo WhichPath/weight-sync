@@ -25,7 +25,7 @@ data class ScaleUiState(
     val isProvisioning: Boolean = false,
     val isBatteryOptimizationIgnored: Boolean = false,
     val currentMeasurement: BodyMeasurement? = null,
-    val lastLogMessage: String = "正在检测无障碍服务状态...",
+    val lastLogMessage: String = "正在检测服务状态...",
     val rawInspectionLog: String = "暂无排查日志",
     val userProfile: UserProfile = UserProfile(),
     val isGarminSyncing: Boolean = false,

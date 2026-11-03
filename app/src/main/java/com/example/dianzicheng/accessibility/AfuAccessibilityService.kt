@@ -80,7 +80,7 @@ class AfuAccessibilityService : AccessibilityService() {
         private val _lastCapturedMeasurement = MutableStateFlow<BodyMeasurement?>(null)
         val lastCapturedMeasurement: StateFlow<BodyMeasurement?> = _lastCapturedMeasurement.asStateFlow()
 
-        private val _lastScrapeLog = MutableStateFlow<String>("等待进入阿福【测量详情】面板...")
+        private val _lastScrapeLog = MutableStateFlow<String>("等待打开阿福测量详情")
         val lastScrapeLog: StateFlow<String> = _lastScrapeLog.asStateFlow()
 
         /** 供 UI 排查面板实时查看的原始文本与解析细节 */
@@ -102,7 +102,7 @@ class AfuAccessibilityService : AccessibilityService() {
         // 不再启动前台服务 / 常驻通知：无障碍服务本身由系统绑定和托管，
         // 掉线时由 App 启动自检或通知栏快捷开关（可选）重新拉起即可。
         AppLogger.i(TAG, "阿福无障碍服务已连接（系统托管，无前台通知）")
-        _lastScrapeLog.value = "无障碍服务已激活，请在阿福点击【测量详情】"
+        _lastScrapeLog.value = "服务已激活，去阿福打开测量详情"
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {

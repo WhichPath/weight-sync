@@ -13,14 +13,25 @@ import java.io.InputStreamReader
 import java.lang.reflect.Method
 
 private const val TAG = "PrivilegedAccess"
-private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 private const val SHIZUKU_RELEASES_URL = "https://github.com/RikkaApps/Shizuku/releases"
+
+/**
+ * 只用于“打开管理器界面”的包名列表，不参与特权功能本身。
+ *
+ * Shizuku 的 Binder/API 是跨包名兼容的，Shizuku+、Stellar 等分支只要实现同一套
+ * Shizuku API 就能直接工作；这里列出的包名仅用于在服务未运行时把用户带到对应的管理器。
+ */
+private val MANAGER_PACKAGES = listOf(
+    "af.shizuku.plus.api",        // Shizuku+
+    "roro.stellar.manager",       // Stellar
+    "moe.shizuku.privileged.api"  // Shizuku / Shizuku+ 的 Compat Hub / drop-in 构建
+)
 
 /**
  * 特权通道：一次性把 WRITE_SECURE_SETTINGS 授予本应用，之后即可直接写 Secure Settings。
  *
  * 这是 GKD「高级授权」的同款模型：
- *  1. 借助 Shizuku（shell 身份）执行
+ *  1. 借助 Shizuku / Shizuku+ / Stellar（shell 身份）执行
  *     `appops set <pkg> ACCESS_RESTRICTED_SETTINGS allow`
  *     `pm grant <pkg> android.permission.WRITE_SECURE_SETTINGS`
  *  2. 授权写入系统后**永久保留**，即使关闭开发者选项、重启手机、Shizuku 退出也依然有效；
@@ -175,17 +186,19 @@ object PrivilegedAccess {
         }
     }
 
-    /** 打开 Shizuku App；未安装时退回 GitHub releases。 */
+    /** 打开已安装的 Shizuku 兼容管理器；都未安装时退回 Shizuku releases。 */
     fun openShizuku(context: Context): Boolean {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
-        if (launchIntent != null) {
+        MANAGER_PACKAGES.forEach { packageName ->
+            if (!isPackageInstalled(context, packageName)) return@forEach
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+                ?: return@forEach
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (runCatching { context.startActivity(launchIntent) }.isSuccess) return true
         }
         return openShizukuDownload(context)
     }
 
-    /** 打开 Shizuku 下载页。 */
+    /** 打开 Shizuku 下载页（兼容管理器的共同上游）。 */
     fun openShizukuDownload(context: Context): Boolean {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SHIZUKU_RELEASES_URL)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -193,8 +206,23 @@ object PrivilegedAccess {
         return runCatching { context.startActivity(intent) }.isSuccess
     }
 
-    fun isShizukuInstalled(context: Context): Boolean = try {
-        context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
+    /** 是否安装了任一已知的 Shizuku 兼容管理器。 */
+    fun isShizukuInstalled(context: Context): Boolean =
+        installedManagerPackage(context) != null
+
+    /** 已安装管理器的显示名，用于 UI 文案；未安装返回 null。 */
+    fun managerLabel(context: Context): String? = when (installedManagerPackage(context)) {
+        "af.shizuku.plus.api" -> "Shizuku+"
+        "roro.stellar.manager" -> "Stellar"
+        "moe.shizuku.privileged.api" -> "Shizuku"
+        else -> null
+    }
+
+    private fun installedManagerPackage(context: Context): String? =
+        MANAGER_PACKAGES.firstOrNull { isPackageInstalled(context, it) }
+
+    private fun isPackageInstalled(context: Context, packageName: String): Boolean = try {
+        context.packageManager.getPackageInfo(packageName, 0)
         true
     } catch (_: PackageManager.NameNotFoundException) {
         false

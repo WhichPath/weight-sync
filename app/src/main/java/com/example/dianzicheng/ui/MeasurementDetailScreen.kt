@@ -165,7 +165,7 @@ fun MeasurementDetailScreen(
                 ) {
                     Column(modifier = Modifier.padding(18.dp)) {
                         Text(
-                            text = "Garmin Connect 官方同步指标",
+                            text = "Garmin 同步指标",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
@@ -215,7 +215,7 @@ fun MeasurementDetailScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         Text(
-                            text = "身体成分全量指标明细",
+                            text = "全部指标",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(bottom = 4.dp)

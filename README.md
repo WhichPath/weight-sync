@@ -33,7 +33,7 @@
   - 彻底移除小米健康等冗余依赖与服务。
 - ♿ **无障碍服务应用内可控（参考 GKD 高级授权）**:
   - 状态三态化：`未开启` / `已开启但未运行` / `运行中`，不再把“系统里滑块是开的”误判成“服务在跑”；
-  - **一次性永久授权**：通过 Shizuku 或电脑 ADB 执行一次 `pm grant`，把 `WRITE_SECURE_SETTINGS` 授予本应用；授权后重启手机、关闭开发者选项、Shizuku 退出，依然可以在应用内直接开关 / 重启无障碍服务；
+  - **一次性永久授权**：通过 Shizuku / Shizuku+ / Stellar 或电脑 ADB 执行一次 `pm grant`，把 `WRITE_SECURE_SETTINGS` 授予本应用；授权后重启手机、关闭开发者选项、管理器退出，依然可以在应用内直接开关 / 重启无障碍服务；
   - 首页内置无障碍开关与详细授权引导：未授权时不会直接跳系统设置，而是展示 Shizuku 一键授权 / ADB 命令 / 重新检测的完整流程，授权成功后自动继续执行原本的开关动作；
   - App 被后台清理后首次打开、回到前台或点击通知栏磁贴时会自动检测“开着但没跑”的异常态并尝试重新拉起；
   - **不再使用前台服务与常驻通知**：无障碍服务由系统绑定托管，可选「阿福同步」快捷磁贴用于无感恢复，不申请通知权限、不挂任何常驻通知；
@@ -43,7 +43,7 @@
 
 ## 🏗️ 架构与编译
 
-v2.1.0 起采用清晰的分层结构：`ui → domain / data / accessibility`，`AppContainer` 统一装配依赖，
+v2.1.1 起采用清晰的分层结构：`ui → domain / data / accessibility`，`AppContainer` 统一装配依赖，
 `ScaleViewModel` 不再持有 `Context`，无障碍系统能力收敛到 `accessibility/AccessibilityRepository`。
 详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

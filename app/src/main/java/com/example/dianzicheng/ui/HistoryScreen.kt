@@ -105,12 +105,12 @@ fun HistoryScreen(
                         }
                     }
                     Text(
-                        "暂无测量历史",
+                        "暂无记录",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.outline
                     )
                     Text(
-                        "在阿福中完成测秤后将在此沉淀历史记录",
+                        "在阿福完成测秤后会自动记录",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
